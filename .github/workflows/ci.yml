@@ -4,7 +4,8 @@
 # version is published must name exactly the published descriptor's image digests; otherwise it is assembled by the toolkit
 # (`pragmatic-release-publish assemble`: every image at its digest, labelled with the digest of its repository's
 # v<version> component.json, the tag present), so a release tag is only cut on a manifest CI has assembled. Read-only:
-# nothing is signed or pushed here, and the release signing key is never read (release.yml only).
+# nothing is signed or pushed here, and the release signing key is never read (release.yml only). Last,
+# tools/bin/signing-key-readers.ts fails if any workflow of the other new repositories reads that key.
 # Only a pull request from a fork (which gets no secrets) skips, with a warning; a missing PACKAGES_TOKEN anywhere else
 # fails the run.
 name: ci
@@ -63,3 +64,10 @@ jobs:
           RELEASE_REGISTRY_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
         run: npx --no-install tsx tools/bin/release-manifest.ts ci --manifest release.json
+      # No workflow of the other new repositories (nine container repositories, pragmatic-e2e, pragmatic-shared) may read
+      # the release signing key: read from GitHub, so it holds without sibling clones.
+      - name: Only release.yml reads the signing key
+        if: steps.token.outputs.present == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npx --no-install tsx tools/bin/signing-key-readers.ts

@@ -592,6 +592,7 @@ class Workflows
         'npm run typecheck',
         'npm test',
         'tools/bin/release-manifest.ts ci --manifest release.json',
+        'tools/bin/signing-key-readers.ts',
     ]
     public static readonly Utf8 = 'utf8'
     public static readonly NoSiblingsSkip = 'no sibling clone in '
