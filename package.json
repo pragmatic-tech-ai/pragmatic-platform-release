@@ -15,7 +15,7 @@
     "assemble:ci": "tsx tools/bin/release-manifest.ts ci"
   },
   "dependencies": {
-    "@pragmatic-tech-ai/pragmatic-release-toolkit": "^0.17.3"
+    "@pragmatic-tech-ai/pragmatic-release-toolkit": "^0.17.6"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
