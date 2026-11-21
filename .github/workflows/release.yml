@@ -1,0 +1,82 @@
+# Publishes a platform release from a `release/X.Y.Z` (stable) or `release/X.Y.Z-early.N` (early access) tag of this
+# repository. Nothing is built here: each of the nine container repositories released its image (tag v<version>,
+# pushed by digest, component.json + digest.txt on its GitHub release); release.json names the nine images by digest.
+# The tag must sit on a commit whose release.json is valid and names the tag's version (tools/bin/release-manifest.ts
+# verify), or the run stops before anything is read from the registry. Then the toolkit's `pragmatic-release-publish
+# assemble` checks every image against the registry and its repository's release (image at its digest, component
+# label = digest of the component.json asset, tag v<version> present, release-<version> image tag free or the same
+# digest, the version unpublished), and `publish --manifest` signs the schema-2 descriptor (the manifest's digests, the
+# labelled component digests, each container repository's tag commit as siblingCommits, this commit as serverCommit)
+# with RELEASE_SIGNING_KEY after checking the signatures against release-keys/release-2026-11.pub.pem, tags every image
+# release-<version>, and pushes the descriptor as ghcr.io/pragmatic-tech-ai/pragmatic-release:<version> last (a stopped
+# publish is re-run as is).
+# Registry writes: the nine image packages and pragmatic-release were created by pragmatic-server and are linked to it,
+# so this repository's GITHUB_TOKEN gets 403 on push until each package grants pragmatic-platform-release Actions
+# access with Write (package settings, "Manage Actions access"). Until then pass GHCR_TOKEN (optional, a token with
+# write:packages); without it the run uses its own GITHUB_TOKEN (username: the actor either way). Reads (assemble, the
+# GitHub releases and tags of the container repositories) use GITHUB_TOKEN.
+# Secrets: PACKAGES_TOKEN (read:packages, npm ci from GitHub Packages), RELEASE_SIGNING_KEY (the Ed25519 private key PEM;
+# this is the only workflow of the organisation's new repositories that reads it, held by tools/tests), GHCR_TOKEN
+# (optional). None is echoed or put on a command line; the npm and key files are written under umask 077 and removed
+# whatever the outcome.
+name: release
+on:
+  push:
+    tags: ['release/*']
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: platform-release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Write the npm registry credentials
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+        run: |
+          umask 077
+          printf '@pragmatic-tech-ai:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n' "$PACKAGES_TOKEN" > "$RUNNER_TEMP/npmrc"
+          echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/npmrc" >> "$GITHUB_ENV"
+      - name: Install and test
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+          rm -f "$RUNNER_TEMP/npmrc"
+      # Refuses a commit without a valid release.json, a manifest breaking this repository's policy, or a tag that is
+      # not release/<the manifest version>.
+      - name: Verify release.json against the tag
+        run: npx --no-install tsx tools/bin/release-manifest.ts verify --manifest release.json --tag "$GITHUB_REF"
+      - name: Assemble (check only)
+        env:
+          RELEASE_REGISTRY_USER: ${{ github.actor }}
+          RELEASE_REGISTRY_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npx --no-install pragmatic-release-publish assemble --manifest release.json
+      - name: Write the release signing key
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          umask 077
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$RUNNER_TEMP/release.key"
+      - name: Sign and publish the release descriptor
+        env:
+          RELEASE_SIGNING_KEY_FILE: ${{ runner.temp }}/release.key
+          RELEASE_REGISTRY_USER: ${{ github.actor }}
+          RELEASE_REGISTRY_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npx --no-install pragmatic-release-publish publish --manifest release.json --key-id release-2026-11 --trust-dir release-keys
+      - name: Remove credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.key" "$RUNNER_TEMP/npmrc"

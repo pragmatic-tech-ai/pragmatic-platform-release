@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "version": "0.1.0-early.6",
+  "components": {
+    "pragmatic-platform-admin": { "repository": "pragmatic-tech-ai/pragmatic-platform-admin", "version": "0.1.0", "digest": "sha256:<digest.txt of the v0.1.0 release>" },
+    "pragmatic-platform-edge": { "repository": "pragmatic-tech-ai/pragmatic-platform-edge", "version": "0.1.0", "digest": "sha256:<digest.txt of the v0.1.0 release>" },
+    "pragmatic-env-server": { "repository": "pragmatic-tech-ai/pragmatic-env-server", "version": "0.1.0", "digest": "sha256:<digest.txt of the v0.1.0 release>" },
+    "pragmatic-env-gateway": { "repository": "pragmatic-tech-ai/pragmatic-env-gateway", "version": "0.1.0", "digest": "sha256:<digest.txt of the v0.1.0 release>" },
+    "pragmatic-hive-agent": { "repository": "pragmatic-tech-ai/pragmatic-hive-agent", "version": "0.1.0", "digest": "sha256:<digest.txt of the v0.1.0 release>" },
+    "pragmatic-tenant-admin": { "repository": "pragmatic-tech-ai/pragmatic-tenant-admin", "version": "0.1.0", "digest": "sha256:<digest.txt of the v0.1.0 release>" },
+    "pragmatic-tenant-idp": { "repository": "pragmatic-tech-ai/pragmatic-tenant-idp", "version": "0.1.0", "digest": "sha256:<digest.txt of the v0.1.0 release>" },
+    "pragmatic-ui-unpack": { "repository": "pragmatic-tech-ai/pragmatic-ui-unpack", "version": "0.1.0", "digest": "sha256:<digest.txt of the v0.1.0 release>" },
+    "pragmatic-postgres": { "repository": "pragmatic-tech-ai/pragmatic-postgres", "version": "0.1.0", "digest": "sha256:<digest.txt of the v0.1.0 release>" }
+  }
+}

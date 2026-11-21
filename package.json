@@ -1,0 +1,25 @@
+{
+  "name": "@pragmatic-tech-ai/pragmatic-platform-release",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Platform release assembly: the release manifest of nine container images by digest, its checks, and the signed release descriptor published from a release tag.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "test": "tsx --test \"tools/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "verify": "tsx tools/bin/release-manifest.ts verify",
+    "assemble:ci": "tsx tools/bin/release-manifest.ts ci"
+  },
+  "dependencies": {
+    "@pragmatic-tech-ai/pragmatic-release-toolkit": "^0.17.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0"
+  }
+}

@@ -1,0 +1,65 @@
+# pragmatic-platform-release CI: install from the lock (every @pragmatic-tech-ai package from GitHub Packages with
+# PACKAGES_TOKEN), typecheck, tests, then the release manifest check (tools/bin/release-manifest.ts ci): no release.json
+# passes; a release.json whose version is already published is the last release and passes; otherwise it is verified
+# and assembled by the toolkit (`pragmatic-release-publish assemble`: every image at its digest, labelled with the digest
+# of its repository's v<version> component.json, the tag present), so a release tag is only cut on a manifest CI has
+# assembled. Read-only: nothing is signed or pushed here, and the release signing key is never read (release.yml only).
+# A pull request from a fork gets no PACKAGES_TOKEN: the run then says so and skips the rest.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+  packages: read
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: PACKAGES_TOKEN present
+        id: token
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+        run: |
+          if [ -n "$PACKAGES_TOKEN" ]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo '::warning::PACKAGES_TOKEN is empty (a pull request from a fork gets no secrets): install, tests and the manifest check are skipped'
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.token.outputs.present == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.token.outputs.present == 'true'
+        with:
+          node-version: '22'
+      - name: Write the npm registry credentials
+        if: steps.token.outputs.present == 'true'
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+        run: |
+          umask 077
+          printf '@pragmatic-tech-ai:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n' "$PACKAGES_TOKEN" > "$RUNNER_TEMP/npmrc"
+          echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/npmrc" >> "$GITHUB_ENV"
+      - name: Install, typecheck and test
+        if: steps.token.outputs.present == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+        run: |
+          npm ci --no-audit --no-fund
+          rm -f "$RUNNER_TEMP/npmrc"
+          npm run typecheck
+          npm test
+      - name: Check release.json
+        if: steps.token.outputs.present == 'true'
+        env:
+          RELEASE_REGISTRY_USER: ${{ github.actor }}
+          RELEASE_REGISTRY_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npx --no-install tsx tools/bin/release-manifest.ts ci --manifest release.json
+      - name: Remove credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/npmrc"
