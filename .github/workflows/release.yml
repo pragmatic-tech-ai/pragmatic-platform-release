@@ -10,8 +10,11 @@
 # tag v<version> present, the image tag release-<version> free or the same digest, the version unpublished), then
 # `publish --manifest`: the schema-2 descriptor (the manifest's digests, the labelled component digests, each container
 # repository's tag commit as siblingCommits, this commit as serverCommit) signed with the key and checked against
-# release-keys/release-2026-11.pub.pem before any push, every image tagged release-<version>, and the descriptor pushed
-# last as ghcr.io/pragmatic-tech-ai/pragmatic-release:<version> (a stopped publish is re-run as is).
+# release-keys/release-2026-11.pub.pem before any push, every image tagged release-<version>, the nine component.json
+# assets (the descriptors the images carry, read from the container releases as for assemble) pushed as
+# pragmatic-release:components-<version> (one layer per app; consoles validate configurations against them, checked
+# against the signed component digests), and the descriptor pushed last as
+# ghcr.io/pragmatic-tech-ai/pragmatic-release:<version> (a stopped publish is re-run as is).
 # Registry: the nine image packages and pragmatic-release are public, so reads need no grant; writes (the release-<version>
 # tags, the descriptor) go to packages created by pragmatic-server and linked to it, so this repository's GITHUB_TOKEN
 # gets 403 until each of the ten packages grants pragmatic-platform-release Actions access with the Write role (package
