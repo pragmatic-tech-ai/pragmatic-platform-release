@@ -14,6 +14,7 @@ import {
     ReleaseDescriptorCodec,
     ReleaseManifest,
     ReleaseManifestDigestError,
+    ReleaseManifestInvalidError,
     ReleaseManifestMissingAppError,
     ReleaseManifestProblemKind,
     ReleaseManifestUnknownAppError,
@@ -334,10 +335,10 @@ describe('PlatformReleaseManifest', () =>
         const fork = F.Filled()
         fork.components[ReleaseApp.TenantIdp].repository = F.ForkRepository
         assert.throws(() => PlatformReleaseManifest.Load(fixture.Write(fork)), (err: Error) =>
-            err instanceof PlatformReleaseManifestError && err.message.endsWith(ReleaseApp.TenantIdp))
+            err instanceof ReleaseManifestInvalidError && err.message.endsWith(ReleaseApp.TenantIdp))
         const swapped = F.Filled()
         swapped.components[ReleaseApp.EnvGateway].repository = PlatformReleaseManifest.RepositoryOf(ReleaseApp.EnvServer)
-        assert.throws(() => PlatformReleaseManifest.Load(fixture.Write(swapped)), PlatformReleaseManifestError)
+        assert.throws(() => PlatformReleaseManifest.Load(fixture.Write(swapped)), ReleaseManifestInvalidError)
     }))
 
     it('refuses an unreadable manifest with a sentence naming the path', () => F.With(fixture =>
