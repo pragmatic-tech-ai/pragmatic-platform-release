@@ -1,9 +1,9 @@
 {
   "schema": 1,
-  "version": "0.1.0-early.7",
+  "version": "0.1.0-early.8",
   "components": {
-    "pragmatic-platform-admin": { "repository": "pragmatic-tech-ai/pragmatic-platform-admin", "version": "0.1.2", "digest": "sha256:80dc32818d4fb0ed2142041c8836b33e2828966ba1ac2695b73c43e4a897cf0d" },
-    "pragmatic-platform-edge": { "repository": "pragmatic-tech-ai/pragmatic-platform-edge", "version": "0.1.0", "digest": "sha256:0ab774e566bbb047ea190c1f44fb0305a1991ba5ecb5105b30802bd17538994f" },
+    "pragmatic-platform-admin": { "repository": "pragmatic-tech-ai/pragmatic-platform-admin", "version": "0.1.3", "digest": "sha256:ed988547b2cc0dc75a45c04a67817987f54c73b70e0639f7532764443d3bfc84" },
+    "pragmatic-platform-edge": { "repository": "pragmatic-tech-ai/pragmatic-platform-edge", "version": "0.1.1", "digest": "sha256:bcd78378104e09f6a3067f9fa0b4c727e2e29721c6a9fd0701daa19e0cf68ff2" },
     "pragmatic-env-server": { "repository": "pragmatic-tech-ai/pragmatic-env-server", "version": "0.1.0", "digest": "sha256:a1d968c37e54415b34e4483f28e277112326f6220c5d0ba42d6b27b3783b4e02" },
     "pragmatic-env-gateway": { "repository": "pragmatic-tech-ai/pragmatic-env-gateway", "version": "0.1.0", "digest": "sha256:d69b13db1b5da50aaf7261e6c4bf634cbb7fb5d47d342845c083a1618f70b918" },
     "pragmatic-hive-agent": { "repository": "pragmatic-tech-ai/pragmatic-hive-agent", "version": "0.1.0", "digest": "sha256:cd53d39ac2ec09f733e096a577ca0b3364f2e5fae27116e4d7129c663781c01a" },
