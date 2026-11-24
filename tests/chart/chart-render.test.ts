@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
+import { parseAllDocuments } from 'yaml'
 import { ChartFixture, type K8sDoc } from './chart-fixture.js'
 
 /** The Secrets the console's bootstrap mints (pragmatic-tenant-admin EngineSecretSet), by namespace scope. */
@@ -48,6 +49,12 @@ class RenderFixture
         }))
     }
 
+    /** The rendered objects, parsed (comments and blank lines dropped). */
+    public static Documents(text: string): unknown[]
+    {
+        return parseAllDocuments(text).map(d => d.toJS()).filter(d => d !== null && d !== undefined)
+    }
+
     public static CheckGolden(name: string, text: string): void
     {
         const file = join(ChartFixture.Golden, name + '.yaml')
@@ -57,7 +64,8 @@ class RenderFixture
             writeFileSync(file, text)
             return
         }
-        assert.equal(text, readFileSync(file, 'utf8'), name + ': the render changed; rerun with UPDATE_GOLDEN=1 and review the golden diff')
+        // Compared as documents, not bytes: helm releases differ in the blank lines a template's trimmed actions leave.
+        assert.deepEqual(RenderFixture.Documents(text), RenderFixture.Documents(readFileSync(file, 'utf8')), name + ': the render changed; rerun with UPDATE_GOLDEN=1 and review the golden diff')
     }
 }
 
