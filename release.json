@@ -1,13 +1,13 @@
 {
   "schema": 1,
-  "version": "0.1.0-early.14",
+  "version": "0.1.0-early.15",
   "components": {
-    "pragmatic-platform-admin": { "repository": "pragmatic-tech-ai/pragmatic-platform-admin", "version": "0.1.7", "digest": "sha256:9224fc0051cab86d3e6da27c6a1777cd2b66650c035e5b7438da88933a6c4221" },
+    "pragmatic-platform-admin": { "repository": "pragmatic-tech-ai/pragmatic-platform-admin", "version": "0.1.8", "digest": "sha256:9045612fb8536d51667b56c3b71081d574944928af675bd4b173cf491c52abcd" },
     "pragmatic-platform-edge": { "repository": "pragmatic-tech-ai/pragmatic-platform-edge", "version": "0.1.1", "digest": "sha256:bcd78378104e09f6a3067f9fa0b4c727e2e29721c6a9fd0701daa19e0cf68ff2" },
     "pragmatic-env-server": { "repository": "pragmatic-tech-ai/pragmatic-env-server", "version": "0.1.3", "digest": "sha256:808a20b188c5025f7983767f0e3570d7eaf400b63e78a0d98505472cfcc8302a" },
     "pragmatic-env-gateway": { "repository": "pragmatic-tech-ai/pragmatic-env-gateway", "version": "0.1.2", "digest": "sha256:0a5f101e3755815565d790ce0690cb28dcc2e2f8d41fb84ee640482b36d0f32e" },
     "pragmatic-hive-agent": { "repository": "pragmatic-tech-ai/pragmatic-hive-agent", "version": "0.1.2", "digest": "sha256:cd23182c0bc59a25e1e1415900cf59b5ec342f6f4ccb0b8daa77c834c8a36ce5" },
-    "pragmatic-tenant-admin": { "repository": "pragmatic-tech-ai/pragmatic-tenant-admin", "version": "0.1.5", "digest": "sha256:60f73d13b736a78b5bba2cc46d4ad87933d903cb2d627116459d8cfe65b3dfda" },
+    "pragmatic-tenant-admin": { "repository": "pragmatic-tech-ai/pragmatic-tenant-admin", "version": "0.1.6", "digest": "sha256:f5ec8c32f7b2ea62620a161d509b0156d3d35a27e27e1be9462d4cf4cdabda54" },
     "pragmatic-tenant-idp": { "repository": "pragmatic-tech-ai/pragmatic-tenant-idp", "version": "0.2.6", "digest": "sha256:926144cdd7e0599285a4c506f72ef70145a471b47fd9b584d1d36f8a813e2538" },
     "pragmatic-ui-unpack": { "repository": "pragmatic-tech-ai/pragmatic-ui-unpack", "version": "0.1.2", "digest": "sha256:8a06aa270136cea20a54e5332289754b004ae0b859fbfba9955828016d5eadfa" },
     "pragmatic-postgres": { "repository": "pragmatic-tech-ai/pragmatic-postgres", "version": "0.1.0", "digest": "sha256:9a1583a99b16c912280112c049f37449729d94a50a90ad02790d96bd86b6d59d" }
