@@ -61,6 +61,7 @@ spec:
             - { name: PRAGMATIC_IDP_DATABASE_URL_FILE, value: /run/secrets/pragmatic-tenant-idp-database/database-url }
             - { name: PRAGMATIC_IDP_SECRETS_DIR, value: /run/secrets/pragmatic/pragmatic-tenant-idp }
             - { name: PRAGMATIC_IDP_TRUSTED_PROXY, value: "true" }
+            {{- include "engine.realmSecrets.env" (dict "root" . "component" "pragmatic-tenant-idp") | nindent 12 }}
           readinessProbe:
             httpGet:
               path: /healthz
@@ -79,6 +80,7 @@ spec:
             - { name: admin-token, mountPath: /idp-data/secrets, readOnly: true }
             - { name: tmp, mountPath: /tmp }
             - { name: database-url, mountPath: /run/secrets/pragmatic-tenant-idp-database, readOnly: true }
+            {{- include "engine.realmSecrets.mounts" . | nindent 12 }}
             {{- include "engine.configurationMounts" (dict "short" "tenant-idp" "component" "pragmatic-tenant-idp") | nindent 12 }}
       volumes:
         - name: data
@@ -95,6 +97,7 @@ spec:
           emptyDir: {}
         - name: database-url
           secret: { secretName: pragmatic-tenant-idp-database, defaultMode: 288, items: [{ key: database-url, path: database-url }] }
+        {{- include "engine.realmSecrets.volumes" (dict "root" . "databaseSecret" "pragmatic-tenant-idp-realm-secrets") | nindent 8 }}
         {{- include "engine.configurationVolumes" (dict "short" "tenant-idp" "component" "pragmatic-tenant-idp") | nindent 8 }}
 ---
 apiVersion: v1

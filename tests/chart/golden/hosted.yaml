@@ -259,7 +259,8 @@ metadata:
     pragmatic/hive: acme-hive
 rules:
   - apiGroups: [""]
-    resources: ["secrets", "configmaps", "services", "persistentvolumeclaims"]
+    # serviceaccounts: an environment server's own account pragmatic-env-server (2.5, the subject clouds bind).
+    resources: ["secrets", "configmaps", "services", "persistentvolumeclaims", "serviceaccounts"]
     verbs: ["*"]
   - apiGroups: ["apps"]
     resources: ["deployments", "deployments/scale", "statefulsets", "statefulsets/scale"]
@@ -655,6 +656,16 @@ spec:
             - { name: PRAGMATIC_TENANT_ADMIN_ENV_SERVER_IMAGE, value: "ghcr.io/pragmatic-tech-ai/pragmatic-env-server@sha256:c147bbacbef86760ca19c158833956667ebdfa0f15cf1c9878a708468d83674a" }
             - { name: PRAGMATIC_TENANT_ADMIN_UI_UNPACK_IMAGE, value: "ghcr.io/pragmatic-tech-ai/pragmatic-ui-unpack@sha256:fd41dd9614e31684498e612ed865f78167f20c88668943da238aa10109e06cf6" }
             - { name: PRAGMATIC_TENANT_ADMIN_OWNER_INITIAL_DIR, value: /run/secrets/pragmatic-owner-initial }
+            - { name: PRAGMATIC_REALM_SECRETS_OPTION, value: "custom" }
+            - { name: PRAGMATIC_REALM_SECRETS_DATABASE_URL_FILE, value: /run/secrets/pragmatic-realm-secrets/database-url }
+            - { name: PRAGMATIC_REALM_SECRETS_MASTER_KEY_FILE, value: /run/secrets/pragmatic-realm-master-key/master.key }
+            - { name: PRAGMATIC_REALM_SECRETS_ACCESS, value: writer }
+            - { name: PRAGMATIC_REALM_ID, value: "acme" }
+            - { name: PRAGMATIC_COMPONENT, value: "pragmatic-tenant-admin" }
+            # The custom home: the console provisions realm_secrets at its start (the three roles' passwords) and copies
+            # the environments' reader URL, with the realm master key, into every environment namespace.
+            - { name: PRAGMATIC_TENANT_ADMIN_REALM_SECRETS_ROLES_DIR, value: /run/secrets/realm-secrets-roles }
+            - { name: PRAGMATIC_TENANT_ADMIN_REALM_SECRETS_READER_URL_FILE, value: /run/secrets/realm-secrets-reader/database-url }
           readinessProbe:
             httpGet:
               path: /healthz
@@ -688,6 +699,11 @@ spec:
             - { name: owner-initial, mountPath: /run/secrets/pragmatic-owner-initial, readOnly: true }
             - { name: release-descriptors, mountPath: /etc/pragmatic/descriptors, readOnly: true }
             - { name: release-keys, mountPath: /etc/pragmatic/release-keys, readOnly: true }
+            
+            - { name: realm-secrets-database, mountPath: /run/secrets/pragmatic-realm-secrets, readOnly: true }
+            - { name: realm-master-key, mountPath: /run/secrets/pragmatic-realm-master-key, readOnly: true }
+            - { name: realm-secrets-roles, mountPath: /run/secrets/realm-secrets-roles, readOnly: true }
+            - { name: realm-secrets-reader, mountPath: /run/secrets/realm-secrets-reader, readOnly: true }
             - name: cfg-tenant-admin
               mountPath: /etc/pragmatic/configuration
               readOnly: true
@@ -732,6 +748,21 @@ spec:
           configMap: { name: pragmatic-engine-descriptors }
         - name: release-keys
           configMap: { name: pragmatic-engine-release-keys }
+        
+        - name: realm-secrets-database
+          secret: { secretName: pragmatic-postgres-realm-secrets-console, defaultMode: 288, items: [{ key: database-url, path: database-url }] }
+        - name: realm-master-key
+          secret: { secretName: pragmatic-realm-master-key, defaultMode: 288, items: [{ key: master.key, path: master.key }] }
+        # Only the three roles' passwords (the URLs stay with their components).
+        - name: realm-secrets-roles
+          projected:
+            defaultMode: 288
+            sources:
+              - secret: { name: pragmatic-postgres-realm-secrets-console, items: [{ key: password, path: console }] }
+              - secret: { name: pragmatic-postgres-realm-secrets-idp, items: [{ key: password, path: idp }] }
+              - secret: { name: pragmatic-postgres-realm-secrets-environments, items: [{ key: password, path: environments }] }
+        - name: realm-secrets-reader
+          secret: { secretName: pragmatic-postgres-realm-secrets-environments, defaultMode: 288, items: [{ key: database-url, path: database-url }] }
         - name: cfg-tenant-admin
           configMap:
             name: pragmatic-config-pragmatic-tenant-admin
@@ -802,6 +833,12 @@ spec:
             - { name: PRAGMATIC_IDP_DATABASE_URL_FILE, value: /run/secrets/pragmatic-tenant-idp-database/database-url }
             - { name: PRAGMATIC_IDP_SECRETS_DIR, value: /run/secrets/pragmatic/pragmatic-tenant-idp }
             - { name: PRAGMATIC_IDP_TRUSTED_PROXY, value: "true" }
+            - { name: PRAGMATIC_REALM_SECRETS_OPTION, value: "custom" }
+            - { name: PRAGMATIC_REALM_SECRETS_DATABASE_URL_FILE, value: /run/secrets/pragmatic-realm-secrets/database-url }
+            - { name: PRAGMATIC_REALM_SECRETS_MASTER_KEY_FILE, value: /run/secrets/pragmatic-realm-master-key/master.key }
+            - { name: PRAGMATIC_REALM_SECRETS_ACCESS, value: writer }
+            - { name: PRAGMATIC_REALM_ID, value: "acme" }
+            - { name: PRAGMATIC_COMPONENT, value: "pragmatic-tenant-idp" }
           readinessProbe:
             httpGet:
               path: /healthz
@@ -833,6 +870,9 @@ spec:
             - { name: admin-token, mountPath: /idp-data/secrets, readOnly: true }
             - { name: tmp, mountPath: /tmp }
             - { name: database-url, mountPath: /run/secrets/pragmatic-tenant-idp-database, readOnly: true }
+            
+            - { name: realm-secrets-database, mountPath: /run/secrets/pragmatic-realm-secrets, readOnly: true }
+            - { name: realm-master-key, mountPath: /run/secrets/pragmatic-realm-master-key, readOnly: true }
             - name: cfg-tenant-idp
               mountPath: /etc/pragmatic/configuration
               readOnly: true
@@ -856,6 +896,11 @@ spec:
           emptyDir: {}
         - name: database-url
           secret: { secretName: pragmatic-tenant-idp-database, defaultMode: 288, items: [{ key: database-url, path: database-url }] }
+        
+        - name: realm-secrets-database
+          secret: { secretName: pragmatic-tenant-idp-realm-secrets, defaultMode: 288, items: [{ key: database-url, path: database-url }] }
+        - name: realm-master-key
+          secret: { secretName: pragmatic-realm-master-key, defaultMode: 288, items: [{ key: master.key, path: master.key }] }
         - name: cfg-tenant-idp
           configMap:
             name: pragmatic-config-pragmatic-tenant-idp
@@ -1183,7 +1228,7 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingressclasses"]
     verbs: ["list"]
-  - nonResourceURLs: ["/version"]
+  - nonResourceURLs: ["/version", "/.well-known/openid-configuration"]
     verbs: ["get"]
 ---
 # Source: pragmatic-engine/templates/bootstrap-job.yaml
@@ -1268,6 +1313,10 @@ rules:
       - pragmatic-owner-initial
       - pragmatic-tenant-idp-ca
       - pragmatic-tls-dev-ca
+      - pragmatic-realm-master-key
+      - pragmatic-postgres-realm-secrets-console
+      - pragmatic-postgres-realm-secrets-idp
+      - pragmatic-postgres-realm-secrets-environments
       - "pragmatic-console-tls"
     verbs: ["get", "patch"]
 ---
@@ -1294,6 +1343,8 @@ rules:
       - pragmatic-tenant-idp-tls
       - pragmatic-tenant-idp-admin-token
       - pragmatic-tenant-idp-database
+      - pragmatic-realm-master-key
+      - pragmatic-tenant-idp-realm-secrets
       - "pragmatic-console-tls"
     verbs: ["get", "patch"]
 ---
@@ -1556,6 +1607,9 @@ spec:
               value: "idp-acme.acme.example"
             - name: PRAGMATIC_PREFLIGHT_BASE_DOMAIN
               value: "acme.example"
+            # azure and aws fetch the cluster's service-account issuer publicly: the workload-identity-issuer check.
+            - name: PRAGMATIC_PREFLIGHT_REALM_SECRETS_OPTION
+              value: "custom"
             - name: PRAGMATIC_PREFLIGHT_TENANT_ID
               value: "acme"
             - name: PRAGMATIC_PREFLIGHT_HIVE_ID

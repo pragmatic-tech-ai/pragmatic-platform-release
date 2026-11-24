@@ -25,7 +25,7 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingressclasses"]
     verbs: ["list"]
-  - nonResourceURLs: ["/version"]
+  - nonResourceURLs: ["/version", "/.well-known/openid-configuration"]
     verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -117,6 +117,9 @@ spec:
               value: {{ include "engine.idpHost" . | quote }}
             - name: PRAGMATIC_PREFLIGHT_BASE_DOMAIN
               value: {{ include "engine.baseDomain" . | quote }}
+            # azure and aws fetch the cluster's service-account issuer publicly: the workload-identity-issuer check.
+            - name: PRAGMATIC_PREFLIGHT_REALM_SECRETS_OPTION
+              value: {{ .Values.realmSecrets.option | quote }}
             - name: PRAGMATIC_PREFLIGHT_TENANT_ID
               value: {{ include "engine.tenant" . | quote }}
             - name: PRAGMATIC_PREFLIGHT_HIVE_ID

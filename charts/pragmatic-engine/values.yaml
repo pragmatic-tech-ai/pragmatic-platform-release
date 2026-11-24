@@ -76,6 +76,32 @@ agent:
 preflight:
   enabled: true
 
+# Where the realm's secrets live (every component resolves secret:realm/<name> there). custom: an encrypted store in this
+# hive's pragmatic-postgres (database realm_secrets, sealed under the minted pragmatic-realm-master-key). gcp, azure, aws:
+# the cloud's secrets service, reached by workload identity only (each component's projected service-account token);
+# set the option's identifiers below, never a key (the schema refuses one). No platform webhook annotation is rendered: the
+# components exchange their own token with these identifiers. Runbook: customer-cluster.md, workload identity.
+realmSecrets:
+  option: custom
+  gcp:
+    projectId: ""
+    # //iam.googleapis.com/projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>
+    workloadIdentityAudience: ""
+    # Optional: a Google service account the components impersonate (else the pool principals hold the roles).
+    serviceAccountEmail: ""
+    # Optional: user-managed replication location for new secrets (else automatic).
+    replicaLocation: ""
+  azure:
+    tenantId: ""
+    clientId: ""
+    vaultUrl: ""
+    # Optional: another Entra authority (sovereign clouds).
+    authorityHost: ""
+  aws:
+    region: ""
+    roleArn: ""
+    sessionName: ""
+
 resources:
   console: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "1", memory: 1536Mi } }
   idp: { requests: { cpu: 50m, memory: 128Mi }, limits: { cpu: 500m, memory: 512Mi } }

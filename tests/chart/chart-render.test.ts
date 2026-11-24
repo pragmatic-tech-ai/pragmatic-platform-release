@@ -13,10 +13,11 @@ class MintedSecrets
         'pragmatic-postgres-superuser', 'pragmatic-postgres-app-tenant-admin', 'pragmatic-postgres-app-tenant-idp',
         'pragmatic-tenant-admin-master-key', 'pragmatic-tenant-admin-fingerprint', 'pragmatic-tenant-admin-seed',
         'pragmatic-tenant-idp-admin-token', 'pragmatic-owner-initial', 'pragmatic-tenant-idp-ca', 'pragmatic-console-tls',
+        'pragmatic-realm-master-key', 'pragmatic-postgres-realm-secrets-console', 'pragmatic-postgres-realm-secrets-idp', 'pragmatic-postgres-realm-secrets-environments',
     ]
     public static readonly Idp: readonly string[] = [
         'pragmatic-tenant-idp-master-key', 'pragmatic-tenant-idp-signing-key', 'pragmatic-tenant-idp-tls',
-        'pragmatic-tenant-idp-admin-token', 'pragmatic-tenant-idp-database',
+        'pragmatic-tenant-idp-admin-token', 'pragmatic-tenant-idp-database', 'pragmatic-realm-master-key', 'pragmatic-tenant-idp-realm-secrets',
     ]
     /** The configuration stores the bootstrap creates when absent; the pods mount them optionally. */
     public static readonly Optional: readonly string[] = ['pragmatic-secrets-pragmatic-tenant-admin', 'pragmatic-secrets-pragmatic-hive-agent', 'pragmatic-secrets-pragmatic-tenant-idp', 'pragmatic-hive-acme-hive-agent-token']

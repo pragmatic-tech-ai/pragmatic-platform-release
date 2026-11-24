@@ -138,12 +138,18 @@ rules:
       - pragmatic-owner-initial
       - pragmatic-tenant-idp-ca
       - pragmatic-tls-dev-ca
+      - pragmatic-realm-master-key
+      - pragmatic-postgres-realm-secrets-console
+      - pragmatic-postgres-realm-secrets-idp
+      - pragmatic-postgres-realm-secrets-environments
       {{- else }}
       - pragmatic-tenant-idp-master-key
       - pragmatic-tenant-idp-signing-key
       - pragmatic-tenant-idp-tls
       - pragmatic-tenant-idp-admin-token
       - pragmatic-tenant-idp-database
+      - pragmatic-realm-master-key
+      - pragmatic-tenant-idp-realm-secrets
       {{- end }}
       - {{ $tls | quote }}
     verbs: ["get", "patch"]

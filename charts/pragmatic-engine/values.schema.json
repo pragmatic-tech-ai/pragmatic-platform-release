@@ -111,6 +111,43 @@
       "additionalProperties": false,
       "properties": { "enabled": { "type": "boolean" } }
     },
+    "realmSecrets": {
+      "description": "The realm secrets home (2.5): identifiers only, never a key (an empty value is unset; anything else must have the identifier's form, which no key, PEM or key file has). Workload identity supplies the credentials.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "option": { "type": "string", "enum": ["custom", "gcp", "azure", "aws"] },
+        "gcp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "projectId": { "type": "string", "pattern": "^$|^[a-z][a-z0-9-]{4,28}[a-z0-9]$" },
+            "workloadIdentityAudience": { "type": "string", "pattern": "^$|^//iam\\.googleapis\\.com/projects/[0-9]{1,20}/locations/global/workloadIdentityPools/[a-z0-9-]{4,32}/providers/[a-z0-9-]{4,32}$" },
+            "serviceAccountEmail": { "type": "string", "pattern": "^$|^[a-z][a-z0-9-]{4,28}[a-z0-9]@[a-z][a-z0-9-]{4,28}[a-z0-9]\\.iam\\.gserviceaccount\\.com$" },
+            "replicaLocation": { "type": "string", "pattern": "^$|^[a-z]+-[a-z]+[0-9]{1,2}$" }
+          }
+        },
+        "azure": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "tenantId": { "type": "string", "pattern": "^$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+            "clientId": { "type": "string", "pattern": "^$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+            "vaultUrl": { "type": "string", "not": { "pattern": "--" }, "pattern": "^$|^https://[a-z][a-z0-9-]{1,22}[a-z0-9]\\.vault\\.(azure\\.net|azure\\.cn|usgovcloudapi\\.net)/?$" },
+            "authorityHost": { "type": "string", "pattern": "^$|^https://login\\.(microsoftonline\\.com|chinacloudapi\\.cn|microsoftonline\\.us)/?$" }
+          }
+        },
+        "aws": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "region": { "type": "string", "pattern": "^$|^[a-z]{2}(-gov)?-[a-z]+-[0-9]$" },
+            "roleArn": { "type": "string", "pattern": "^$|^arn:aws(-cn|-us-gov)?:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$" },
+            "sessionName": { "type": "string", "pattern": "^$|^[A-Za-z][A-Za-z0-9+=,.@-]{1,31}$", "not": { "pattern": "^(AKIA|ASIA)[A-Z0-9]{16}$" } }
+          }
+        }
+      }
+    },
     "resources": {
       "type": "object",
       "additionalProperties": false,

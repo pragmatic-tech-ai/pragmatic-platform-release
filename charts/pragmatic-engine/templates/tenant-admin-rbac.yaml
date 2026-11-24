@@ -49,7 +49,8 @@ metadata:
     {{- include "engine.hiveLabels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: ["secrets", "configmaps", "services", "persistentvolumeclaims"]
+    # serviceaccounts: an environment server's own account pragmatic-env-server (2.5, the subject clouds bind).
+    resources: ["secrets", "configmaps", "services", "persistentvolumeclaims", "serviceaccounts"]
     verbs: ["*"]
   - apiGroups: ["apps"]
     resources: ["deployments", "deployments/scale", "statefulsets", "statefulsets/scale"]
