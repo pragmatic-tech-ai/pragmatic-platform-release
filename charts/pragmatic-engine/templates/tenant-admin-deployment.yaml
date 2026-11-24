@@ -77,6 +77,11 @@ spec:
           ports:
             - name: http
               containerPort: 7100
+            {{- if and (not (include "engine.standalone" .)) (not .Values.hosted) }}
+            # The internal intent endpoint the hive agent forwards environment intents to (C3.4).
+            - name: intents
+              containerPort: 7211
+            {{- end }}
           env:
             - { name: PRAGMATIC_TENANT_ADMIN_DATA_ROOT, value: /data }
             - { name: PRAGMATIC_TENANT_ADMIN_PORT, value: "7100" }
@@ -117,6 +122,9 @@ spec:
             - { name: PRAGMATIC_TENANT_ADMIN_AGENT_URL, value: {{ printf "http://pragmatic-hive-agent-internal.%s.svc:7210" $ns | quote }} }
             - { name: PRAGMATIC_TENANT_ADMIN_AGENT_TOKEN_FILE, value: /var/run/secrets/pragmatic-hive-agent/token }
             - { name: PRAGMATIC_TENANT_ADMIN_CONSOLE_ADDRESS, value: {{ .Values.console.address | quote }} }
+            # Pull-only management (C3.4): the only caller of the internal intent endpoint on 7211 (TokenReview, audience
+            # pragmatic-tenant-admin).
+            - { name: PRAGMATIC_ENGINE_AGENT_SERVICE_ACCOUNT, value: {{ printf "system:serviceaccount:%s:%s" $ns (include "engine.agentName" .) | quote }} }
             {{- end }}
           readinessProbe:
             httpGet:
@@ -223,6 +231,25 @@ spec:
   ports:
     - port: 7100
       targetPort: http
+{{- if and (not (include "engine.standalone" .)) (not .Values.hosted) }}
+---
+# The console's internal intent endpoint (C3.4): reached by the hive agent only (the NetworkPolicy below).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-internal
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    pragmatic/app: {{ $name }}
+  ports:
+    - name: intents
+      port: 7211
+      targetPort: intents
+{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -271,3 +298,13 @@ spec:
       ports:
         - protocol: TCP
           port: 7100
+    {{- if and (not (include "engine.standalone" .)) (not .Values.hosted) }}
+    # Only the hive agent reaches the internal intent endpoint (it also presents its token, checked by TokenReview).
+    - from:
+        - podSelector:
+            matchLabels:
+              pragmatic/app: {{ include "engine.agentName" . }}
+      ports:
+        - protocol: TCP
+          port: 7211
+    {{- end }}

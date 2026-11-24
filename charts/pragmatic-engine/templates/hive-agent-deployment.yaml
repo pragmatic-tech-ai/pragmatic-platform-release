@@ -4,9 +4,10 @@
 # The hive agent (level connected): it generates the hive's key in the cluster, serves the console's internal enrolment
 # API on 7210 (only the console's pods reach it: hive-agent-networkpolicy.yaml) and, once enrolled, reports over the signed
 # agent channel (C3.3). Hosted hives (set by the host agent, C5.1) enrol themselves with the host agent's one-time code
-# (Secret pragmatic-hive-enrolment-code), serve no internal API and bind it to cluster-admin; otherwise it gets the placer role,
-# empty in this release (never a read of Secrets, pods/exec, pods/portforward or services/proxy), and the narrow Roles of
-# hive-agent-rbac.yaml.
+# (Secret pragmatic-hive-enrolment-code), serve no internal API and bind it to cluster-admin; otherwise it gets the placer role
+# (hive-agent-placer-clusterrole.yaml: place, never look) fenced by the admission policy (hive-agent-admission-policy.yaml),
+# and the narrow Roles of hive-agent-rbac.yaml. Enrolled and Delegated agents apply pulled intents (C3.4): engine components
+# themselves, environments through the console's internal endpoint on 7211 with a token for audience pragmatic-tenant-admin.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -15,17 +16,6 @@ metadata:
   labels:
     {{- include "engine.hiveLabels" . | nindent 4 }}
 ---
-{{- if not .Values.hosted }}
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: pragmatic-hive-agent-placer
-  labels:
-    {{- include "engine.hiveLabels" . | nindent 4 }}
-# Empty until enrolment: an idle agent needs no access; what it may place is granted with the hive's level (C3.3, C3.4).
-rules: []
----
-{{- end }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -90,6 +80,12 @@ spec:
             - { name: PRAGMATIC_AGENT_IDP_NAMESPACE, value: {{ include "engine.idpName" . | quote }} }
             - { name: PRAGMATIC_AGENT_IDP_DEPLOYMENT, value: {{ include "engine.idpName" . | quote }} }
             - { name: PRAGMATIC_AGENT_POSTGRES_STATEFULSET, value: pragmatic-postgres }
+            {{- if not .Values.hosted }}
+            # Pull-only management (C3.4): the console's intent endpoint, the agent's token for it, its own Deployment.
+            - { name: PRAGMATIC_AGENT_CONSOLE_INTENT_URL, value: {{ printf "http://%s-internal.%s.svc:7211" (include "engine.consoleName" .) $ns | quote }} }
+            - { name: PRAGMATIC_AGENT_CONSOLE_TOKEN_FILE, value: /var/run/secrets/pragmatic-tenant-admin/token }
+            - { name: PRAGMATIC_AGENT_DEPLOYMENT, value: {{ $name | quote }} }
+            {{- end }}
             {{- if .Values.hosted }}
             # Hosted (C5.1, placed by the platform's host agent): the agent enrols itself at level hosted with the one-time
             # code the host agent wrote into the Secret pragmatic-hive-enrolment-code, under the relayed console address.
@@ -108,6 +104,9 @@ spec:
           volumeMounts:
             - { name: trust-root, mountPath: /etc/pragmatic/agent-trust-root, readOnly: true }
             - { name: tmp, mountPath: /tmp }
+            {{- if not .Values.hosted }}
+            - { name: console-token, mountPath: /var/run/secrets/pragmatic-tenant-admin, readOnly: true }
+            {{- end }}
             {{- include "engine.configurationMounts" (dict "short" "hive-agent" "component" "pragmatic-hive-agent") | nindent 12 }}
       volumes:
         # The platform's trust root the agent pins at enrolment (public).
@@ -115,6 +114,17 @@ spec:
           configMap: { name: pragmatic-hive-agent-trust-root, items: [{ key: platform.pub.pem, path: platform.pub.pem }] }
         - name: tmp
           emptyDir: {}
+        {{- if not .Values.hosted }}
+        # The agent's token for the console's internal intent endpoint only (audience pragmatic-tenant-admin, an hour, rotated).
+        - name: console-token
+          projected:
+            defaultMode: 288
+            sources:
+              - serviceAccountToken:
+                  audience: pragmatic-tenant-admin
+                  expirationSeconds: 3600
+                  path: token
+        {{- end }}
         {{- include "engine.configurationVolumes" (dict "short" "hive-agent" "component" "pragmatic-hive-agent") | nindent 8 }}
 ---
 # The platform's trust root the agent pins at enrolment (public, values agent.trustRoot.publicKey).

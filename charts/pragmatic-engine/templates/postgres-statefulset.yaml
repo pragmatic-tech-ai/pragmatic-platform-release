@@ -26,6 +26,8 @@ metadata:
   labels:
     {{- include "engine.hiveLabels" . | nindent 4 }}
     app.kubernetes.io/name: pragmatic-postgres
+    # The hive agent's admission policy admits its patches (component-at-version, repair) only to managed objects (C3.4).
+    app.kubernetes.io/managed-by: pragmatic-engine
 spec:
   serviceName: pragmatic-postgres
   replicas: 1

@@ -94,9 +94,10 @@ spec:
 # The hive agent (level connected): it generates the hive's key in the cluster, serves the console's internal enrolment
 # API on 7210 (only the console's pods reach it: hive-agent-networkpolicy.yaml) and, once enrolled, reports over the signed
 # agent channel (C3.3). Hosted hives (set by the host agent, C5.1) enrol themselves with the host agent's one-time code
-# (Secret pragmatic-hive-enrolment-code), serve no internal API and bind it to cluster-admin; otherwise it gets the placer role,
-# empty in this release (never a read of Secrets, pods/exec, pods/portforward or services/proxy), and the narrow Roles of
-# hive-agent-rbac.yaml.
+# (Secret pragmatic-hive-enrolment-code), serve no internal API and bind it to cluster-admin; otherwise it gets the placer role
+# (hive-agent-placer-clusterrole.yaml: place, never look) fenced by the admission policy (hive-agent-admission-policy.yaml),
+# and the narrow Roles of hive-agent-rbac.yaml. Enrolled and Delegated agents apply pulled intents (C3.4): engine components
+# themselves, environments through the console's internal endpoint on 7211 with a token for audience pragmatic-tenant-admin.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -952,6 +953,8 @@ metadata:
   labels:
     pragmatic/hive: acme-hive
     app.kubernetes.io/name: pragmatic-postgres
+    # The hive agent's admission policy admits its patches (component-at-version, repair) only to managed objects (C3.4).
+    app.kubernetes.io/managed-by: pragmatic-engine
 spec:
   serviceName: pragmatic-postgres
   replicas: 1

@@ -3,7 +3,8 @@
 {{- $name := include "engine.agentName" . }}
 {{- $idp := include "engine.idpName" . }}
 # What the connected agent may do for its enrolment and reports (C3.3), and nothing more: create Secrets (its identity
-# Secret, once) and read or update only pragmatic-hive-identity; read, create and update only the enrolment ConfigMap;
+# Secret, once) and read or update only pragmatic-hive-identity; read, create and update only the enrolment and kept-intents
+# ConfigMaps (C3.4);
 # read the engine's own workloads; create TokenReviews (the console's bearer on its internal API); list Deployments for
 # the environments it reports. Never a read of any other Secret.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -26,7 +27,7 @@ rules:
     verbs: ["create"]
   - apiGroups: [""]
     resources: ["configmaps"]
-    resourceNames: ["pragmatic-hive-enrolment"]
+    resourceNames: ["pragmatic-hive-enrolment", "pragmatic-hive-intents"]
     verbs: ["get", "update"]
   - apiGroups: ["apps"]
     resources: ["deployments"]

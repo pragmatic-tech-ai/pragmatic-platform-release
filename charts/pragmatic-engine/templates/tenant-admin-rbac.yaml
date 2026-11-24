@@ -24,6 +24,12 @@ rules:
     resources: ["clusterroles"]
     resourceNames: [{{ $envRole | quote }}]
     verbs: ["bind"]
+  {{- if and (not (include "engine.standalone" .)) (not .Values.hosted) }}
+  # The hive agent's bearer on the internal intent endpoint (C3.4): audience pragmatic-tenant-admin, the agent's account.
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

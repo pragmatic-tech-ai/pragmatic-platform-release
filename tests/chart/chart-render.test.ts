@@ -23,6 +23,46 @@ class MintedSecrets
     public static readonly Optional: readonly string[] = ['pragmatic-secrets-pragmatic-tenant-admin', 'pragmatic-secrets-pragmatic-hive-agent', 'pragmatic-secrets-pragmatic-tenant-idp']
 }
 
+/**
+ * The agent admission policy's expressions read the way the API server reads them, for the parts a template test can
+ * evaluate: the image pattern (a CEL raw string, RE2; the pattern uses no feature where RE2 and JavaScript differ), the
+ * namespace list and prefix, and the managed-by values. The full policy is proved live (C3.4 Task 8, kubectl --as).
+ */
+class AgentPolicyExpressions
+{
+    private static readonly ImagePattern = /matches\(r'([^']+)'\)/
+    private static readonly NamespaceList = /variables\.namespace in \[([^\]]+)\]/
+    private static readonly NamespacePrefix = /variables\.namespace\.startsWith\('([^']+)'\)/
+    private static readonly ManagedList = /\['app\.kubernetes\.io\/managed-by'\] in \[([^\]]+)\]/
+    private readonly text: string
+
+    public constructor(validations: Array<{ expression: string }>)
+    {
+        this.text = validations.map(v => v.expression).join('\n')
+    }
+
+    public ImageAllowed(image: string): boolean
+    {
+        return new RegExp(AgentPolicyExpressions.ImagePattern.exec(this.text)![1]!).test(image)
+    }
+
+    public NamespaceAllowed(namespace: string): boolean
+    {
+        const listed = AgentPolicyExpressions.Quoted(AgentPolicyExpressions.NamespaceList.exec(this.text)![1]!)
+        return listed.includes(namespace) || namespace.startsWith(AgentPolicyExpressions.NamespacePrefix.exec(this.text)![1]!)
+    }
+
+    public ManagedBy(): string[]
+    {
+        return AgentPolicyExpressions.Quoted(AgentPolicyExpressions.ManagedList.exec(this.text)![1]!)
+    }
+
+    private static Quoted(list: string): string[]
+    {
+        return list.split(',').map(entry => entry.trim().replace(/^'|'$/g, ''))
+    }
+}
+
 class RenderFixture
 {
     public static readonly Connected = { 'tls.mode': 'self-signed' }
@@ -132,12 +172,104 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
         assert.equal(ChartFixture.Find(hosted, 'ClusterRole', 'pragmatic-hive-agent-placer'), undefined)
         const connected = ChartFixture.Render(RenderFixture.Connected)
         assert.equal(ChartFixture.Find(connected, 'ClusterRoleBinding', 'pragmatic-hive-acme-hive-agent')?.roleRef.name, 'pragmatic-hive-agent-placer')
-        const placer = ChartFixture.Find(connected, 'ClusterRole', 'pragmatic-hive-agent-placer')!
-        const granted = JSON.stringify(placer.rules)
-        for (const forbidden of ['secrets', 'pods/exec', 'pods/portforward', 'services/proxy'])
+        assert.ok(ChartFixture.Find(connected, 'ClusterRole', 'pragmatic-hive-agent-placer') !== undefined)
+    })
+
+    it('the placer role grants no read of secrets and no exec, port-forward, proxy or logs', () =>
+    {
+        const placer = ChartFixture.Find(ChartFixture.Render(RenderFixture.Connected), 'ClusterRole', 'pragmatic-hive-agent-placer')!
+        const rules = placer.rules as Array<{ apiGroups: string[], resources: string[], verbs: string[] }>
+        const granted = rules.flatMap(rule => rule.resources.map(resource => ({ resource, verbs: rule.verbs })))
+        for (const forbidden of ['pods', 'pods/exec', 'pods/portforward', 'pods/log', 'pods/attach', 'services/proxy', 'nodes/proxy', 'nodes'])
         {
-            assert.equal(granted.includes(forbidden), false, forbidden)
+            assert.equal(granted.some(entry => entry.resource === forbidden), false, forbidden)
         }
+        assert.ok(granted.every(entry => !entry.verbs.includes('*') && !entry.resource.includes('*')))
+        const secrets = granted.filter(entry => entry.resource === 'secrets').flatMap(entry => entry.verbs)
+        assert.deepEqual([...secrets].sort(), ['create', 'delete', 'patch'], 'Secrets placed, never read')
+        const reads = granted.filter(entry => entry.verbs.some(verb => ['get', 'list', 'watch'].includes(verb))).map(entry => entry.resource).sort()
+        assert.deepEqual(reads, ['deployments', 'namespaces', 'statefulsets'])
+        for (const placed of ['deployments', 'statefulsets', 'services', 'configmaps', 'ingresses', 'networkpolicies', 'serviceaccounts', 'persistentvolumeclaims', 'namespaces'])
+        {
+            assert.ok(granted.some(entry => entry.resource === placed && ['create', 'update', 'patch', 'delete'].every(verb => entry.verbs.includes(verb))), placed)
+        }
+    })
+
+    it('the admission policy is rendered unless hosted', () =>
+    {
+        const connected = ChartFixture.Render(RenderFixture.Connected)
+        const policy = ChartFixture.Find(connected, 'ValidatingAdmissionPolicy', 'pragmatic-hive-acme-hive-agent')!
+        assert.equal(policy.spec.failurePolicy, 'Fail')
+        assert.deepEqual(policy.spec.matchConditions, [{ name: 'hive-agent-service-account', expression: "request.userInfo.username == 'system:serviceaccount:pragmatic-system:pragmatic-hive-acme-hive-agent'" }])
+        const binding = ChartFixture.Find(connected, 'ValidatingAdmissionPolicyBinding', 'pragmatic-hive-acme-hive-agent')!
+        assert.deepEqual(binding.spec, { policyName: 'pragmatic-hive-acme-hive-agent', validationActions: ['Deny'] })
+        const placerResources = (ChartFixture.Find(connected, 'ClusterRole', 'pragmatic-hive-agent-placer')!.rules as any[]).flatMap(rule => rule.resources as string[])
+        const fenced = (policy.spec.matchConstraints.resourceRules as any[]).flatMap(rule => rule.resources as string[])
+        assert.ok(placerResources.every(resource => fenced.includes(resource)), 'every resource the agent may place is fenced')
+        for (const values of [RenderFixture.Hosted, RenderFixture.Standalone])
+        {
+            const docs = ChartFixture.Render(values)
+            assert.equal(docs.some(d => d.kind === 'ValidatingAdmissionPolicy' && d.metadata.name.includes('agent')), false)
+            assert.equal(ChartFixture.Find(docs, 'ClusterRole', 'pragmatic-hive-agent-placer'), undefined)
+        }
+    })
+
+    it('the policy\'s CEL expressions accept a managed digest image and reject a tag, another registry and another namespace', () =>
+    {
+        const policy = ChartFixture.Find(ChartFixture.Render(RenderFixture.Connected), 'ValidatingAdmissionPolicy', 'pragmatic-hive-acme-hive-agent')!
+        const cel = new AgentPolicyExpressions(policy.spec.validations as Array<{ expression: string }>)
+        const digest = '@sha256:' + 'a'.repeat(64)
+        assert.ok(cel.ImageAllowed('ghcr.io/pragmatic-tech-ai/pragmatic-tenant-admin' + digest))
+        assert.ok(cel.ImageAllowed('registry.pragmatic-tech.ai/pragmatic-tech-ai/pragmatic-postgres' + digest))
+        assert.equal(cel.ImageAllowed('ghcr.io/pragmatic-tech-ai/pragmatic-tenant-admin:0.1.13'), false, 'a tag')
+        assert.equal(cel.ImageAllowed('docker.io/pragmatic-tech-ai/pragmatic-tenant-admin' + digest), false, 'another registry')
+        assert.equal(cel.ImageAllowed('ghcr.io/someone-else/pragmatic-tenant-admin' + digest), false, 'another organisation')
+        assert.equal(cel.ImageAllowed('ghcr.io/pragmatic-tech-ai/x:1@sha256:' + 'a'.repeat(63)), false, 'a short digest')
+        assert.ok(cel.NamespaceAllowed('pragmatic-system'))
+        assert.ok(cel.NamespaceAllowed('pragmatic-idp-acme'))
+        assert.ok(cel.NamespaceAllowed('pragmatic-env-prod'))
+        assert.equal(cel.NamespaceAllowed('kube-system'), false)
+        assert.equal(cel.NamespaceAllowed('default'), false)
+        assert.deepEqual(cel.ManagedBy(), ['pragmatic-hive-agent', 'pragmatic-tenant-admin', 'pragmatic-engine'])
+        // The engine's own workloads carry a managed-by the policy admits, so the agent can move them.
+        const docs = ChartFixture.Render(RenderFixture.Connected)
+        for (const workload of docs.filter(d => ['Deployment', 'StatefulSet'].includes(d.kind)))
+        {
+            assert.ok(cel.ManagedBy().includes(workload.metadata.labels?.['app.kubernetes.io/managed-by'] ?? ''), workload.kind + '/' + workload.metadata.name)
+            for (const container of [...workload.spec.template.spec.containers, ...(workload.spec.template.spec.initContainers ?? [])])
+            {
+                assert.ok(cel.ImageAllowed(container.image), container.image)
+            }
+        }
+    })
+
+    it('the console\'s internal intent endpoint is reached by the agent only, with a token for audience pragmatic-tenant-admin', () =>
+    {
+        const docs = ChartFixture.Render(RenderFixture.Connected)
+        const service = ChartFixture.Find(docs, 'Service', 'pragmatic-tenant-admin-acme-internal')!
+        assert.deepEqual(service.spec.selector, { 'pragmatic/app': 'pragmatic-tenant-admin-acme' })
+        assert.deepEqual(service.spec.ports, [{ name: 'intents', port: 7211, targetPort: 'intents' }])
+        const consolePolicy = ChartFixture.Find(docs, 'NetworkPolicy', 'pragmatic-tenant-admin-acme')!
+        assert.deepEqual((consolePolicy.spec.ingress as any[]).find(rule => rule.ports[0].port === 7211), { from: [{ podSelector: { matchLabels: { 'pragmatic/app': 'pragmatic-hive-acme-hive-agent' } } }], ports: [{ protocol: 'TCP', port: 7211 }] })
+        const consolePod = ChartFixture.Find(docs, 'Deployment', 'pragmatic-tenant-admin-acme')!.spec.template.spec
+        assert.ok((consolePod.containers[0].ports as any[]).some(port => port.name === 'intents' && port.containerPort === 7211))
+        const consoleEnv = new Map((consolePod.containers[0].env as any[]).map(e => [e.name, e.value]))
+        assert.equal(consoleEnv.get('PRAGMATIC_ENGINE_AGENT_SERVICE_ACCOUNT'), 'system:serviceaccount:pragmatic-system:pragmatic-hive-acme-hive-agent')
+        const consoleRole = ChartFixture.Find(docs, 'ClusterRole', 'pragmatic-tenant-admin-acme')!
+        assert.ok((consoleRole.rules as any[]).some(rule => rule.resources.includes('tokenreviews') && JSON.stringify(rule.verbs) === JSON.stringify(['create'])))
+        const agentPod = ChartFixture.Find(docs, 'Deployment', 'pragmatic-hive-acme-hive-agent')!.spec.template.spec
+        const volume = (agentPod.volumes as any[]).find(v => v.name === 'console-token')
+        assert.deepEqual(volume.projected.sources, [{ serviceAccountToken: { audience: 'pragmatic-tenant-admin', expirationSeconds: 3600, path: 'token' } }])
+        const mount = (agentPod.containers[0].volumeMounts as any[]).find(m => m.name === 'console-token')
+        const agentEnv = new Map((agentPod.containers[0].env as any[]).map(e => [e.name, e.value]))
+        assert.equal(agentEnv.get('PRAGMATIC_AGENT_CONSOLE_TOKEN_FILE'), mount.mountPath + '/token')
+        assert.equal(agentEnv.get('PRAGMATIC_AGENT_CONSOLE_INTENT_URL'), 'http://pragmatic-tenant-admin-acme-internal.pragmatic-system.svc:7211')
+        assert.equal(agentEnv.get('PRAGMATIC_AGENT_DEPLOYMENT'), 'pragmatic-hive-acme-hive-agent')
+        const hosted = ChartFixture.Render(RenderFixture.Hosted)
+        assert.equal(ChartFixture.Find(hosted, 'Service', 'pragmatic-tenant-admin-acme-internal'), undefined)
+        const hostedAgent = ChartFixture.Find(hosted, 'Deployment', 'pragmatic-hive-acme-hive-agent')!.spec.template.spec
+        assert.equal((hostedAgent.volumes as any[]).some(v => v.name === 'console-token'), false)
+        assert.equal((hostedAgent.containers[0].env as any[]).some(e => e.name === 'PRAGMATIC_AGENT_CONSOLE_INTENT_URL'), false)
     })
 
     it('every image is referenced by digest', () =>
@@ -281,7 +413,12 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
         assert.ok(secretRules.length > 0)
         for (const { kind, rule } of secretRules)
         {
-            assert.equal(kind, 'Role', 'no cluster-wide Secret access')
+            if (kind === 'ClusterRole')
+            {
+                // The placer: Secrets placed cluster-wide (fenced by the admission policy), never read.
+                assert.deepEqual([...rule.verbs].sort(), ['create', 'delete', 'patch'], 'no cluster-wide Secret read')
+                continue
+            }
             const reads = (rule.verbs as string[]).filter(verb => verb !== 'create')
             if (reads.length > 0)
             {
@@ -290,7 +427,7 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
             }
         }
         const configMaps = roles.flatMap(role => (role.rules as any[]).filter(rule => (rule.resources as string[]).includes('configmaps')))
-        assert.ok(configMaps.every(rule => (rule.verbs as string[]).every(verb => verb === 'create') || JSON.stringify(rule.resourceNames) === JSON.stringify(['pragmatic-hive-enrolment'])))
+        assert.ok(configMaps.every(rule => (rule.verbs as string[]).every(verb => verb !== 'get' && verb !== 'list' && verb !== 'watch') || JSON.stringify(rule.resourceNames) === JSON.stringify(['pragmatic-hive-enrolment', 'pragmatic-hive-intents'])))
         const reporter = ChartFixture.Find(docs, 'ClusterRole', 'pragmatic-hive-agent-reporter')!
         assert.deepEqual(reporter.rules, [
             { apiGroups: ['authentication.k8s.io'], resources: ['tokenreviews'], verbs: ['create'] },

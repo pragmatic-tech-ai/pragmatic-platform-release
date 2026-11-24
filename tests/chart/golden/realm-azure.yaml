@@ -78,6 +78,14 @@ spec:
       ports:
         - protocol: TCP
           port: 7100
+    # Only the hive agent reaches the internal intent endpoint (it also presents its token, checked by TokenReview).
+    - from:
+        - podSelector:
+            matchLabels:
+              pragmatic/app: pragmatic-hive-acme-hive-agent
+      ports:
+        - protocol: TCP
+          port: 7211
 ---
 # Source: pragmatic-engine/templates/tenant-idp-deployment.yaml
 # The sign-in service trusts the forwarded client address, so only the ingress controller, the console and this hive's
@@ -117,9 +125,11 @@ spec:
 # Source: pragmatic-engine/templates/hive-agent-deployment.yaml
 # The hive agent (level connected): it generates the hive's key in the cluster, serves the console's internal enrolment
 # API on 7210 (only the console's pods reach it: hive-agent-networkpolicy.yaml) and, once enrolled, reports over the signed
-# agent channel (C3.3). Hosted hives (set by the host agent) bind it to cluster-admin; otherwise it gets the placer role,
-# empty in this release (never a read of Secrets, pods/exec, pods/portforward or services/proxy), and the narrow Roles of
-# hive-agent-rbac.yaml.
+# agent channel (C3.3). Hosted hives (set by the host agent, C5.1) enrol themselves with the host agent's one-time code
+# (Secret pragmatic-hive-enrolment-code), serve no internal API and bind it to cluster-admin; otherwise it gets the placer role
+# (hive-agent-placer-clusterrole.yaml: place, never look) fenced by the admission policy (hive-agent-admission-policy.yaml),
+# and the narrow Roles of hive-agent-rbac.yaml. Enrolled and Delegated agents apply pulled intents (C3.4): engine components
+# themselves, environments through the console's internal endpoint on 7211 with a token for audience pragmatic-tenant-admin.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -265,15 +275,34 @@ spec:
     requests:
       storage: 1Gi
 ---
-# Source: pragmatic-engine/templates/hive-agent-deployment.yaml
+# Source: pragmatic-engine/templates/hive-agent-placer-clusterrole.yaml
+# "Place, never look" (levels design §4, C3.4): what an Enrolled or Delegated agent may do to apply pulled intents (an
+# Enrolled hive applies them too, after the customer's approval). It may create, change and delete the objects that place
+# workloads, and read only Deployments, StatefulSets and Namespaces (to see what it rolled). It may create, patch and
+# delete Secrets but never get, list or watch one; nothing on pods (exec, port-forward, logs), services/proxy or
+# nodes/proxy. Where it may do it is fenced by the admission policy (hive-agent-admission-policy.yaml).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: pragmatic-hive-agent-placer
   labels:
     pragmatic/hive: acme-hive
-# Empty until enrolment: an idle agent needs no access; what it may place is granted with the hive's level (C3.3, C3.4).
-rules: []
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "configmaps", "serviceaccounts", "persistentvolumeclaims"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "patch", "delete"]
 ---
 # Source: pragmatic-engine/templates/hive-agent-rbac.yaml
 # TokenReviews (the console's bearer) and the environments' Deployments (read-only), cluster-scoped.
@@ -312,6 +341,10 @@ rules:
     resources: ["clusterroles"]
     resourceNames: ["pragmatic-tenant-admin-acme-env"]
     verbs: ["bind"]
+  # The hive agent's bearer on the internal intent endpoint (C3.4): audience pragmatic-tenant-admin, the agent's account.
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
 ---
 # Source: pragmatic-engine/templates/tenant-admin-rbac.yaml
 # What the console may do inside an environment namespace (bound there per environment, never cluster-wide).
@@ -383,7 +416,8 @@ subjects:
 ---
 # Source: pragmatic-engine/templates/hive-agent-rbac.yaml
 # What the connected agent may do for its enrolment and reports (C3.3), and nothing more: create Secrets (its identity
-# Secret, once) and read or update only pragmatic-hive-identity; read, create and update only the enrolment ConfigMap;
+# Secret, once) and read or update only pragmatic-hive-identity; read, create and update only the enrolment and kept-intents
+# ConfigMaps (C3.4);
 # read the engine's own workloads; create TokenReviews (the console's bearer on its internal API); list Deployments for
 # the environments it reports. Never a read of any other Secret.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -406,7 +440,7 @@ rules:
     verbs: ["create"]
   - apiGroups: [""]
     resources: ["configmaps"]
-    resourceNames: ["pragmatic-hive-enrolment"]
+    resourceNames: ["pragmatic-hive-enrolment", "pragmatic-hive-intents"]
     verbs: ["get", "update"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
@@ -632,6 +666,24 @@ spec:
     - port: 7100
       targetPort: http
 ---
+# Source: pragmatic-engine/templates/tenant-admin-deployment.yaml
+# The console's internal intent endpoint (C3.4): reached by the hive agent only (the NetworkPolicy below).
+apiVersion: v1
+kind: Service
+metadata:
+  name: pragmatic-tenant-admin-acme-internal
+  namespace: pragmatic-system
+  labels:
+    pragmatic/hive: acme-hive
+spec:
+  type: ClusterIP
+  selector:
+    pragmatic/app: pragmatic-tenant-admin-acme
+  ports:
+    - name: intents
+      port: 7211
+      targetPort: intents
+---
 # Source: pragmatic-engine/templates/tenant-idp-deployment.yaml
 apiVersion: v1
 kind: Service
@@ -703,6 +755,10 @@ spec:
             - { name: PRAGMATIC_AGENT_IDP_NAMESPACE, value: "pragmatic-idp-acme" }
             - { name: PRAGMATIC_AGENT_IDP_DEPLOYMENT, value: "pragmatic-idp-acme" }
             - { name: PRAGMATIC_AGENT_POSTGRES_STATEFULSET, value: pragmatic-postgres }
+            # Pull-only management (C3.4): the console's intent endpoint, the agent's token for it, its own Deployment.
+            - { name: PRAGMATIC_AGENT_CONSOLE_INTENT_URL, value: "http://pragmatic-tenant-admin-acme-internal.pragmatic-system.svc:7211" }
+            - { name: PRAGMATIC_AGENT_CONSOLE_TOKEN_FILE, value: /var/run/secrets/pragmatic-tenant-admin/token }
+            - { name: PRAGMATIC_AGENT_DEPLOYMENT, value: "pragmatic-hive-acme-hive-agent" }
           readinessProbe:
             exec:
               command: ["test", "-f", "/tmp/pragmatic-ready"]
@@ -727,6 +783,7 @@ spec:
           volumeMounts:
             - { name: trust-root, mountPath: /etc/pragmatic/agent-trust-root, readOnly: true }
             - { name: tmp, mountPath: /tmp }
+            - { name: console-token, mountPath: /var/run/secrets/pragmatic-tenant-admin, readOnly: true }
             - name: cfg-hive-agent
               mountPath: /etc/pragmatic/configuration
               readOnly: true
@@ -741,6 +798,15 @@ spec:
           configMap: { name: pragmatic-hive-agent-trust-root, items: [{ key: platform.pub.pem, path: platform.pub.pem }] }
         - name: tmp
           emptyDir: {}
+        # The agent's token for the console's internal intent endpoint only (audience pragmatic-tenant-admin, an hour, rotated).
+        - name: console-token
+          projected:
+            defaultMode: 288
+            sources:
+              - serviceAccountToken:
+                  audience: pragmatic-tenant-admin
+                  expirationSeconds: 3600
+                  path: token
         - name: cfg-hive-agent
           configMap:
             name: pragmatic-config-pragmatic-hive-agent
@@ -825,6 +891,9 @@ spec:
           ports:
             - name: http
               containerPort: 7100
+            # The internal intent endpoint the hive agent forwards environment intents to (C3.4).
+            - name: intents
+              containerPort: 7211
           env:
             - { name: PRAGMATIC_TENANT_ADMIN_DATA_ROOT, value: /data }
             - { name: PRAGMATIC_TENANT_ADMIN_PORT, value: "7100" }
@@ -861,6 +930,9 @@ spec:
             - { name: PRAGMATIC_TENANT_ADMIN_AGENT_URL, value: "http://pragmatic-hive-agent-internal.pragmatic-system.svc:7210" }
             - { name: PRAGMATIC_TENANT_ADMIN_AGENT_TOKEN_FILE, value: /var/run/secrets/pragmatic-hive-agent/token }
             - { name: PRAGMATIC_TENANT_ADMIN_CONSOLE_ADDRESS, value: "own-domain" }
+            # Pull-only management (C3.4): the only caller of the internal intent endpoint on 7211 (TokenReview, audience
+            # pragmatic-tenant-admin).
+            - { name: PRAGMATIC_ENGINE_AGENT_SERVICE_ACCOUNT, value: "system:serviceaccount:pragmatic-system:pragmatic-hive-acme-hive-agent" }
           readinessProbe:
             httpGet:
               path: /healthz
@@ -1124,6 +1196,8 @@ metadata:
   labels:
     pragmatic/hive: acme-hive
     app.kubernetes.io/name: pragmatic-postgres
+    # The hive agent's admission policy admits its patches (component-at-version, repair) only to managed objects (C3.4).
+    app.kubernetes.io/managed-by: pragmatic-engine
 spec:
   serviceName: pragmatic-postgres
   replicas: 1
@@ -1290,6 +1364,47 @@ spec:
                 port:
                   number: 9443
 ---
+# Source: pragmatic-engine/templates/hive-agent-admission-policy.yaml
+# The hive agent's admission fence (C3.4, "place, never look", enforced in the cluster): every change the agent's
+# service account makes must be in the engine's namespaces (this one, the sign-in service's) or an environment's
+# (pragmatic-env-*), to an object the agent, the console or the chart manages (app.kubernetes.io/managed-by), and every
+# container image of a Deployment or StatefulSet must be a release image by digest (ghcr.io or registry.pragmatic-tech.ai,
+# organisation pragmatic-tech-ai). Kubernetes ValidatingAdmissionPolicy (GA in 1.30): nothing to run or certify.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: pragmatic-hive-acme-hive-agent
+  labels:
+    pragmatic/hive: acme-hive
+spec:
+  failurePolicy: Fail
+  matchConditions:
+    - name: hive-agent-service-account
+      expression: "request.userInfo.username == 'system:serviceaccount:pragmatic-system:pragmatic-hive-acme-hive-agent'"
+  matchConstraints:
+    resourceRules:
+      - { apiGroups: [""], apiVersions: ["v1"], operations: ["CREATE", "UPDATE", "DELETE"], resources: ["namespaces", "services", "configmaps", "serviceaccounts", "persistentvolumeclaims", "secrets"], scope: "*" }
+      - { apiGroups: ["apps"], apiVersions: ["v1"], operations: ["CREATE", "UPDATE", "DELETE"], resources: ["deployments", "statefulsets"], scope: "*" }
+      - { apiGroups: ["networking.k8s.io"], apiVersions: ["v1"], operations: ["CREATE", "UPDATE", "DELETE"], resources: ["ingresses", "networkpolicies"], scope: "*" }
+  variables:
+    - name: target
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: namespace
+      expression: "request.resource.resource == 'namespaces' ? variables.target.metadata.name : request.namespace"
+  validations:
+    - expression: >-
+        variables.namespace in ['pragmatic-system', 'pragmatic-idp-acme'] || variables.namespace.startsWith('pragmatic-env-')
+      message: "The hive agent may only change objects in the engine's namespaces and its environments' (pragmatic-env-*)."
+    - expression: >-
+        has(variables.target.metadata.labels) && 'app.kubernetes.io/managed-by' in variables.target.metadata.labels
+        && variables.target.metadata.labels['app.kubernetes.io/managed-by'] in ['pragmatic-hive-agent', 'pragmatic-tenant-admin', 'pragmatic-engine']
+      message: "The hive agent may only change objects the agent, the console or the engine chart manages."
+    - expression: >-
+        request.operation == 'DELETE' || !(request.resource.resource in ['deployments', 'statefulsets'])
+        || (object.spec.template.spec.containers.all(c, c.image.matches(r'^(ghcr\.io|registry\.pragmatic-tech\.ai)/pragmatic-tech-ai/[^@]+@sha256:[a-f0-9]{64}$'))
+        && (!has(object.spec.template.spec.initContainers) || object.spec.template.spec.initContainers.all(c, c.image.matches(r'^(ghcr\.io|registry\.pragmatic-tech\.ai)/pragmatic-tech-ai/[^@]+@sha256:[a-f0-9]{64}$'))))
+      message: "The hive agent may only run release images by digest (ghcr.io or registry.pragmatic-tech.ai, pragmatic-tech-ai)."
+---
 # Source: pragmatic-engine/templates/tenant-admin-rbac.yaml
 # The console's admission fence (TenantConsoleAdmission): only its own hive's environment namespaces, enforcing a Pod
 # Security level; only its own role binding of its own environment role to its own account; outside the environment
@@ -1325,6 +1440,17 @@ spec:
       message: "The console may only bind its environment role to its own ServiceAccount."
     - expression: "request.resource.resource != 'deployments' || request.namespace.startsWith('pragmatic-env-') || ((has(object.metadata.labels) == has(oldObject.metadata.labels) && (!has(object.metadata.labels) || object.metadata.labels == oldObject.metadata.labels)) && (has(object.metadata.annotations) == has(oldObject.metadata.annotations) && (!has(object.metadata.annotations) || object.metadata.annotations == oldObject.metadata.annotations)) && (has(object.metadata.ownerReferences) == has(oldObject.metadata.ownerReferences) && (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences == oldObject.metadata.ownerReferences)) && (has(object.metadata.finalizers) == has(oldObject.metadata.finalizers) && (!has(object.metadata.finalizers) || object.metadata.finalizers == oldObject.metadata.finalizers)) && (has(object.spec.template.metadata.labels) == has(oldObject.spec.template.metadata.labels) && (!has(object.spec.template.metadata.labels) || object.spec.template.metadata.labels == oldObject.spec.template.metadata.labels)) && (has(object.spec.template.metadata.name) == has(oldObject.spec.template.metadata.name) && (!has(object.spec.template.metadata.name) || object.spec.template.metadata.name == oldObject.spec.template.metadata.name)) && (has(object.spec.template.metadata.namespace) == has(oldObject.spec.template.metadata.namespace) && (!has(object.spec.template.metadata.namespace) || object.spec.template.metadata.namespace == oldObject.spec.template.metadata.namespace)) && (has(object.spec.template.metadata.generateName) == has(oldObject.spec.template.metadata.generateName) && (!has(object.spec.template.metadata.generateName) || object.spec.template.metadata.generateName == oldObject.spec.template.metadata.generateName)) && (has(object.spec.template.metadata.ownerReferences) == has(oldObject.spec.template.metadata.ownerReferences) && (!has(object.spec.template.metadata.ownerReferences) || object.spec.template.metadata.ownerReferences == oldObject.spec.template.metadata.ownerReferences)) && (has(object.spec.template.metadata.finalizers) == has(oldObject.spec.template.metadata.finalizers) && (!has(object.spec.template.metadata.finalizers) || object.spec.template.metadata.finalizers == oldObject.spec.template.metadata.finalizers)) && (has(object.spec.template.spec) == has(oldObject.spec.template.spec) && (!has(object.spec.template.spec) || object.spec.template.spec == oldObject.spec.template.spec)) && (has(object.spec.replicas) == has(oldObject.spec.replicas) && (!has(object.spec.replicas) || object.spec.replicas == oldObject.spec.replicas)) && (has(object.spec.selector) == has(oldObject.spec.selector) && (!has(object.spec.selector) || object.spec.selector == oldObject.spec.selector)) && (has(object.spec.strategy) == has(oldObject.spec.strategy) && (!has(object.spec.strategy) || object.spec.strategy == oldObject.spec.strategy)) && (has(object.spec.minReadySeconds) == has(oldObject.spec.minReadySeconds) && (!has(object.spec.minReadySeconds) || object.spec.minReadySeconds == oldObject.spec.minReadySeconds)) && (has(object.spec.revisionHistoryLimit) == has(oldObject.spec.revisionHistoryLimit) && (!has(object.spec.revisionHistoryLimit) || object.spec.revisionHistoryLimit == oldObject.spec.revisionHistoryLimit)) && (has(object.spec.progressDeadlineSeconds) == has(oldObject.spec.progressDeadlineSeconds) && (!has(object.spec.progressDeadlineSeconds) || object.spec.progressDeadlineSeconds == oldObject.spec.progressDeadlineSeconds)) && (has(object.spec.paused) == has(oldObject.spec.paused) && (!has(object.spec.paused) || object.spec.paused == oldObject.spec.paused)) && (!has(object.spec.template.metadata.annotations) || object.spec.template.metadata.annotations.all(k, k == 'pragmatic-tech.ai/configuration-hash' || k == 'pragmatic-tech.ai/secrets-revision' || (has(oldObject.spec.template.metadata.annotations) && k in oldObject.spec.template.metadata.annotations && oldObject.spec.template.metadata.annotations[k] == object.spec.template.metadata.annotations[k]))) && (!has(oldObject.spec.template.metadata.annotations) || oldObject.spec.template.metadata.annotations.all(k, k == 'pragmatic-tech.ai/configuration-hash' || k == 'pragmatic-tech.ai/secrets-revision' || (has(object.spec.template.metadata.annotations) && k in object.spec.template.metadata.annotations && object.spec.template.metadata.annotations[k] == oldObject.spec.template.metadata.annotations[k]))))"
       message: "Outside its environment namespaces the console may only change a Deployment's configuration-hash annotation."
+---
+# Source: pragmatic-engine/templates/hive-agent-admission-policy.yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: pragmatic-hive-acme-hive-agent
+  labels:
+    pragmatic/hive: acme-hive
+spec:
+  policyName: pragmatic-hive-acme-hive-agent
+  validationActions: ["Deny"]
 ---
 # Source: pragmatic-engine/templates/tenant-admin-rbac.yaml
 apiVersion: admissionregistration.k8s.io/v1
