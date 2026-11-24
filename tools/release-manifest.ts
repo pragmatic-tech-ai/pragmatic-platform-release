@@ -56,6 +56,20 @@ export class PlatformReleaseManifest
     private static readonly AgentTooOldPrefix = 'pragmatic-platform-admin '
     private static readonly AgentTooOldInfix = ' renders hive agents that need pragmatic-hive-agent '
     private static readonly AgentTooOldSuffix = ' or later (a token file and a ready file); this release pins '
+    /**
+     * The first env server whose descriptor declares setting bounds (`minimum`, `maximum`; pragmatic-shared 0.18.10), and the
+     * first tenant admin and platform admin consoles that read such a descriptor: every older reader refuses a descriptor
+     * member it does not know, so the console would not start on the release's descriptors and the platform admin console
+     * could not deliver them (C3.1 ruling "setting bounds").
+     */
+    private static readonly BoundedEnvServer = '0.1.3'
+    private static readonly BoundsTenantAdmin = '0.1.5'
+    private static readonly BoundsPlatformAdmin = '0.1.7'
+    private static readonly BoundsPrefix = 'pragmatic-env-server '
+    private static readonly BoundsInfix = ' declares setting bounds, which only pragmatic-tenant-admin '
+    private static readonly BoundsAnd = ' and pragmatic-platform-admin '
+    private static readonly BoundsPins = ' or later read; this release pins pragmatic-tenant-admin '
+    private static readonly BoundsPinsAnd = ' and pragmatic-platform-admin '
     private static readonly VersionPattern = /^(\d+)\.(\d+)\.(\d+)/
 
     /** `pragmatic-tech-ai/<app>`: the container repository an app's image and component.json come from. */
@@ -84,7 +98,8 @@ export class PlatformReleaseManifest
 
     /**
      * Every app names `pragmatic-tech-ai/<app>`, so no release is assembled from a fork's or another app's release; and the
-     * platform admin console and the hive agent it renders fit together (FileTokenPlatformAdmin, FileTokenAgent).
+     * platform admin console and the hive agent it renders fit together (FileTokenPlatformAdmin, FileTokenAgent); and an env
+     * server descriptor with setting bounds ships only with consoles that read it (BoundedEnvServer).
      */
     public static CheckPolicy(doc: ReleaseManifestDocument): void
     {
@@ -102,6 +117,13 @@ export class PlatformReleaseManifest
         if (S.AtLeast(admin, S.FileTokenPlatformAdmin) && !S.AtLeast(agent, S.FileTokenAgent))
         {
             throw new PlatformReleaseManifestError(S.AgentTooOldPrefix + admin + S.AgentTooOldInfix + S.FileTokenAgent + S.AgentTooOldSuffix + agent)
+        }
+        const server = doc.components[ReleaseApp.EnvServer].version
+        const tenant = doc.components[ReleaseApp.TenantAdmin].version
+        if (S.AtLeast(server, S.BoundedEnvServer) && !(S.AtLeast(tenant, S.BoundsTenantAdmin) && S.AtLeast(admin, S.BoundsPlatformAdmin)))
+        {
+            throw new PlatformReleaseManifestError(S.BoundsPrefix + server + S.BoundsInfix + S.BoundsTenantAdmin + S.BoundsAnd + S.BoundsPlatformAdmin
+                + S.BoundsPins + tenant + S.BoundsPinsAnd + admin)
         }
     }
 

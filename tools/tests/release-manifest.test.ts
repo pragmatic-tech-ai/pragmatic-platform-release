@@ -355,6 +355,25 @@ describe('PlatformReleaseManifest', () =>
         assert.equal(PlatformReleaseManifest.Load(fixture.Write(paired)).version, F.Version, 'an older console renders the older agent')
     }))
 
+    it('refuses an env server that declares setting bounds beside a console that cannot read them, naming the versions', () => F.With(fixture =>
+    {
+        const paired = F.Filled()
+        paired.components[ReleaseApp.PlatformAdmin].version = '0.1.7'
+        paired.components[ReleaseApp.HiveAgent].version = '0.1.2'
+        paired.components[ReleaseApp.EnvServer].version = '0.1.3'
+        paired.components[ReleaseApp.TenantAdmin].version = '0.1.4'
+        assert.throws(() => PlatformReleaseManifest.Load(fixture.Write(paired)), (err: Error) =>
+            err instanceof PlatformReleaseManifestError && err.message.startsWith('pragmatic-env-server 0.1.3 declares setting bounds') && err.message.endsWith('pragmatic-tenant-admin 0.1.4 and pragmatic-platform-admin 0.1.7'))
+        paired.components[ReleaseApp.TenantAdmin].version = '0.1.5'
+        paired.components[ReleaseApp.PlatformAdmin].version = '0.1.6'
+        assert.throws(() => PlatformReleaseManifest.Load(fixture.Write(paired)), (err: Error) => err instanceof PlatformReleaseManifestError && err.message.endsWith('pragmatic-platform-admin 0.1.6'))
+        paired.components[ReleaseApp.PlatformAdmin].version = '0.1.7'
+        assert.equal(PlatformReleaseManifest.Load(fixture.Write(paired)).components[ReleaseApp.EnvServer].version, '0.1.3')
+        paired.components[ReleaseApp.EnvServer].version = '0.1.2'
+        paired.components[ReleaseApp.TenantAdmin].version = '0.1.4'
+        assert.equal(PlatformReleaseManifest.Load(fixture.Write(paired)).version, F.Version, 'an env server without bounds pairs with any console')
+    }))
+
     it('refuses an unreadable manifest with a sentence naming the path', () => F.With(fixture =>
     {
         const path = join(fixture.Dir, F.AbsentFile)
