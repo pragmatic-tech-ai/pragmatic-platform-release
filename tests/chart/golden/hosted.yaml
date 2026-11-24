@@ -1297,6 +1297,24 @@ rules:
       - "pragmatic-console-tls"
     verbs: ["get", "patch"]
 ---
+# Source: pragmatic-engine/templates/preflight-job.yaml
+# Reads only the kept engine's seed (its tenant and hive ids) and the operator's TLS Secret (its certificate's names and validity).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pragmatic-engine-preflight
+  namespace: pragmatic-system
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-30"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - pragmatic-tenant-admin-seed
+    verbs: ["get"]
+---
 # Source: pragmatic-engine/templates/bootstrap-job.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -1333,6 +1351,25 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: pragmatic-engine-bootstrap
+    namespace: pragmatic-system
+---
+# Source: pragmatic-engine/templates/preflight-job.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pragmatic-engine-preflight
+  namespace: pragmatic-system
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-30"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: pragmatic-engine-preflight
+subjects:
+  - kind: ServiceAccount
+    name: pragmatic-engine-preflight
     namespace: pragmatic-system
 ---
 # Source: pragmatic-engine/templates/bootstrap-job.yaml
@@ -1519,6 +1556,10 @@ spec:
               value: "idp-acme.acme.example"
             - name: PRAGMATIC_PREFLIGHT_BASE_DOMAIN
               value: "acme.example"
+            - name: PRAGMATIC_PREFLIGHT_TENANT_ID
+              value: "acme"
+            - name: PRAGMATIC_PREFLIGHT_HIVE_ID
+              value: "acme-hive"
             - name: PRAGMATIC_PREFLIGHT_CONSOLE_ADDRESS
               value: "own-domain"
             - name: PRAGMATIC_PREFLIGHT_TLS_MODE

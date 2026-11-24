@@ -230,6 +230,8 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
         {
             assert.match(object.metadata.annotations!['helm.sh/hook-delete-policy'], /hook-failed/, object.kind + '/' + object.metadata.name)
         }
+        const preflight = hooks.find(d => d.kind === 'Role' && d.metadata.name === 'pragmatic-engine-preflight')!
+        assert.deepEqual(preflight.rules![0].resourceNames, ['pragmatic-tenant-admin-seed'], 'self-signed: the preflight reads only the kept seed (its ids)')
         assert.deepEqual(RenderFixture.Jobs(docs), [
             'pragmatic-engine-bootstrap:pre-install,pre-upgrade:-10', 'pragmatic-engine-namespace:pre-install,pre-upgrade:-18', 'pragmatic-engine-preflight:pre-install,pre-upgrade:-20',
         ])
