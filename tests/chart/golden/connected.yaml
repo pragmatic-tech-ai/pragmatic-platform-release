@@ -1,4 +1,28 @@
 ---
+# Source: pragmatic-engine/templates/hive-agent-networkpolicy.yaml
+# Only the engine's console reaches the agent's internal enrolment API (C3.3); nothing else reaches the agent at all.
+# The agent also checks each caller's token (TokenReview: audience pragmatic-hive-agent, the console's account).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pragmatic-hive-acme-hive-agent
+  namespace: pragmatic-system
+  labels:
+    pragmatic/hive: acme-hive
+spec:
+  podSelector:
+    matchLabels:
+      pragmatic/app: pragmatic-hive-acme-hive-agent
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: pragmatic-tenant-admin
+      ports:
+        - protocol: TCP
+          port: 7210
+---
 # Source: pragmatic-engine/templates/postgres-statefulset.yaml
 # Only the console, the realm sign-in service and this hive's environments reach Postgres.
 apiVersion: networking.k8s.io/v1
@@ -91,9 +115,11 @@ spec:
           port: 9443
 ---
 # Source: pragmatic-engine/templates/hive-agent-deployment.yaml
-# The hive agent (level connected): idle until the hive is enrolled (C3.3 writes its token), then it polls the platform's
-# agent channel. Hosted hives (set by the host agent) bind it to cluster-admin; otherwise it gets the placer role, empty in
-# this release (never a read of Secrets, pods/exec, pods/portforward or services/proxy).
+# The hive agent (level connected): it generates the hive's key in the cluster, serves the console's internal enrolment
+# API on 7210 (only the console's pods reach it: hive-agent-networkpolicy.yaml) and, once enrolled, reports over the signed
+# agent channel (C3.3). Hosted hives (set by the host agent) bind it to cluster-admin; otherwise it gets the placer role,
+# empty in this release (never a read of Secrets, pods/exec, pods/portforward or services/proxy), and the narrow Roles of
+# hive-agent-rbac.yaml.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -146,6 +172,18 @@ data:
   pragmatic-tenant-admin.json: "{\"component\":\"pragmatic-tenant-admin\",\"schema\":1}"
   pragmatic-tenant-idp.json: "{\"component\":\"pragmatic-tenant-idp\",\"schema\":1}"
   pragmatic-ui-unpack.json: "{\"component\":\"pragmatic-ui-unpack\",\"schema\":1}"
+---
+# Source: pragmatic-engine/templates/hive-agent-deployment.yaml
+# The platform's trust root the agent pins at enrolment (public, values agent.trustRoot.publicKey).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pragmatic-hive-agent-trust-root
+  namespace: pragmatic-system
+  labels:
+    pragmatic/hive: acme-hive
+data:
+  platform.pub.pem: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAdE1EAHq9DfJ16znpp0fqmi9/POakazXiNqkVxxj8otY=\n-----END PUBLIC KEY-----\n"
 ---
 # Source: pragmatic-engine/templates/postgres-applications-configmap.yaml
 apiVersion: v1
@@ -237,6 +275,22 @@ metadata:
 # Empty until enrolment: an idle agent needs no access; what it may place is granted with the hive's level (C3.3, C3.4).
 rules: []
 ---
+# Source: pragmatic-engine/templates/hive-agent-rbac.yaml
+# TokenReviews (the console's bearer) and the environments' Deployments (read-only), cluster-scoped.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pragmatic-hive-agent-reporter
+  labels:
+    pragmatic/hive: acme-hive
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["list"]
+---
 # Source: pragmatic-engine/templates/tenant-admin-rbac.yaml
 # The console's access, as the platform's console install grants it: it creates and deletes its own hive's environment
 # namespaces and binds its environment role inside them (fenced by the admission policy below), configures the engine's
@@ -295,6 +349,22 @@ subjects:
     name: pragmatic-hive-acme-hive-agent
     namespace: pragmatic-system
 ---
+# Source: pragmatic-engine/templates/hive-agent-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pragmatic-hive-acme-hive-agent-reporter
+  labels:
+    pragmatic/hive: acme-hive
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pragmatic-hive-agent-reporter
+subjects:
+  - kind: ServiceAccount
+    name: pragmatic-hive-acme-hive-agent
+    namespace: pragmatic-system
+---
 # Source: pragmatic-engine/templates/tenant-admin-rbac.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -310,6 +380,57 @@ subjects:
   - kind: ServiceAccount
     name: pragmatic-tenant-admin-acme
     namespace: pragmatic-system
+---
+# Source: pragmatic-engine/templates/hive-agent-rbac.yaml
+# What the connected agent may do for its enrolment and reports (C3.3), and nothing more: create Secrets (its identity
+# Secret, once) and read or update only pragmatic-hive-identity; read, create and update only the enrolment ConfigMap;
+# read the engine's own workloads; create TokenReviews (the console's bearer on its internal API); list Deployments for
+# the environments it reports. Never a read of any other Secret.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pragmatic-hive-acme-hive-agent-enrolment
+  namespace: pragmatic-system
+  labels:
+    pragmatic/hive: acme-hive
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["pragmatic-hive-identity"]
+    verbs: ["get", "update"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["pragmatic-hive-enrolment"]
+    verbs: ["get", "update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["pragmatic-tenant-admin-acme"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    resourceNames: ["pragmatic-postgres"]
+    verbs: ["get"]
+---
+# Source: pragmatic-engine/templates/hive-agent-rbac.yaml
+# The sign-in service's Deployment, for the agent's reports (in the sign-in service's namespace, pragmatic-idp-<tenant>).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pragmatic-hive-acme-hive-agent-report
+  namespace: pragmatic-idp-acme
+  labels:
+    pragmatic/hive: acme-hive
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["pragmatic-idp-acme"]
+    verbs: ["get"]
 ---
 # Source: pragmatic-engine/templates/tenant-admin-rbac.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -374,6 +495,40 @@ rules:
     resourceNames: ["pragmatic-console-tls"]
     verbs: ["get"]
 ---
+# Source: pragmatic-engine/templates/hive-agent-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pragmatic-hive-acme-hive-agent-enrolment
+  namespace: pragmatic-system
+  labels:
+    pragmatic/hive: acme-hive
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: pragmatic-hive-acme-hive-agent-enrolment
+subjects:
+  - kind: ServiceAccount
+    name: pragmatic-hive-acme-hive-agent
+    namespace: pragmatic-system
+---
+# Source: pragmatic-engine/templates/hive-agent-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pragmatic-hive-acme-hive-agent-report
+  namespace: pragmatic-idp-acme
+  labels:
+    pragmatic/hive: acme-hive
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: pragmatic-hive-acme-hive-agent-report
+subjects:
+  - kind: ServiceAccount
+    name: pragmatic-hive-acme-hive-agent
+    namespace: pragmatic-system
+---
 # Source: pragmatic-engine/templates/tenant-admin-rbac.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -424,6 +579,24 @@ subjects:
   - kind: ServiceAccount
     name: pragmatic-tenant-admin-acme
     namespace: pragmatic-system
+---
+# Source: pragmatic-engine/templates/hive-agent-deployment.yaml
+# The agent's internal enrolment API (C3.3): reached by the console only (hive-agent-networkpolicy.yaml).
+apiVersion: v1
+kind: Service
+metadata:
+  name: pragmatic-hive-agent-internal
+  namespace: pragmatic-system
+  labels:
+    pragmatic/hive: acme-hive
+spec:
+  type: ClusterIP
+  selector:
+    pragmatic/app: pragmatic-hive-acme-hive-agent
+  ports:
+    - name: internal
+      port: 7210
+      targetPort: internal
 ---
 # Source: pragmatic-engine/templates/postgres-statefulset.yaml
 apiVersion: v1
@@ -515,10 +688,21 @@ spec:
         - name: agent
           image: ghcr.io/pragmatic-tech-ai/pragmatic-hive-agent@sha256:68aa7746ab947a2525fea72525fcc9e99db4fe0aa7d8ce9071a597a09397b74e
           terminationMessagePolicy: FallbackToLogsOnError
+          ports:
+            - name: internal
+              containerPort: 7210
           env:
             - { name: PRAGMATIC_AGENT_REGISTRY_URL, value: "https://agent.pragmatic-tech.ai" }
             - { name: PRAGMATIC_AGENT_HIVE_ID, value: "acme-hive" }
-            - { name: PRAGMATIC_AGENT_TOKEN_FILE, value: /run/secrets/pragmatic-agent-token/token }
+            - { name: PRAGMATIC_AGENT_TENANT, value: "acme" }
+            - { name: PRAGMATIC_AGENT_ENGINE_VERSION, value: "0.0.0" }
+            - { name: PRAGMATIC_AGENT_TRUST_ROOT_FILE, value: /etc/pragmatic/agent-trust-root/platform.pub.pem }
+            - { name: PRAGMATIC_AGENT_NAMESPACE, value: "pragmatic-system" }
+            - { name: PRAGMATIC_AGENT_CONSOLE_SERVICE_ACCOUNT, value: "pragmatic-tenant-admin-acme" }
+            - { name: PRAGMATIC_AGENT_CONSOLE_DEPLOYMENT, value: "pragmatic-tenant-admin-acme" }
+            - { name: PRAGMATIC_AGENT_IDP_NAMESPACE, value: "pragmatic-idp-acme" }
+            - { name: PRAGMATIC_AGENT_IDP_DEPLOYMENT, value: "pragmatic-idp-acme" }
+            - { name: PRAGMATIC_AGENT_POSTGRES_STATEFULSET, value: pragmatic-postgres }
           readinessProbe:
             exec:
               command: ["test", "-f", "/tmp/pragmatic-ready"]
@@ -541,7 +725,7 @@ spec:
               cpu: 20m
               memory: 64Mi
           volumeMounts:
-            - { name: agent-token, mountPath: /run/secrets/pragmatic-agent-token, readOnly: true }
+            - { name: trust-root, mountPath: /etc/pragmatic/agent-trust-root, readOnly: true }
             - { name: tmp, mountPath: /tmp }
             - name: cfg-hive-agent
               mountPath: /etc/pragmatic/configuration
@@ -552,9 +736,9 @@ spec:
             - name: cfgrun-hive-agent
               mountPath: /run/pragmatic/secrets
       volumes:
-        # Absent until enrolment (C3.3) writes it; the agent waits idle until the token file appears.
-        - name: agent-token
-          secret: { secretName: pragmatic-hive-acme-hive-agent-token, optional: true, defaultMode: 288, items: [{ key: token, path: token }] }
+        # The platform's trust root the agent pins at enrolment (public).
+        - name: trust-root
+          configMap: { name: pragmatic-hive-agent-trust-root, items: [{ key: platform.pub.pem, path: platform.pub.pem }] }
         - name: tmp
           emptyDir: {}
         - name: cfg-hive-agent
@@ -676,6 +860,10 @@ spec:
             # the environments' reader URL, with the realm master key, into every environment namespace.
             - { name: PRAGMATIC_TENANT_ADMIN_REALM_SECRETS_ROLES_DIR, value: /run/secrets/realm-secrets-roles }
             - { name: PRAGMATIC_TENANT_ADMIN_REALM_SECRETS_READER_URL_FILE, value: /run/secrets/realm-secrets-reader/database-url }
+            # "Connect this hive" (C3.3): the agent's internal API, the console's token for it, and the console address.
+            - { name: PRAGMATIC_TENANT_ADMIN_AGENT_URL, value: "http://pragmatic-hive-agent-internal.pragmatic-system.svc:7210" }
+            - { name: PRAGMATIC_TENANT_ADMIN_AGENT_TOKEN_FILE, value: /var/run/secrets/pragmatic-hive-agent/token }
+            - { name: PRAGMATIC_TENANT_ADMIN_CONSOLE_ADDRESS, value: "own-domain" }
           readinessProbe:
             httpGet:
               path: /healthz
@@ -714,6 +902,7 @@ spec:
             - { name: realm-master-key, mountPath: /run/secrets/pragmatic-realm-master-key, readOnly: true }
             - { name: realm-secrets-roles, mountPath: /run/secrets/realm-secrets-roles, readOnly: true }
             - { name: realm-secrets-reader, mountPath: /run/secrets/realm-secrets-reader, readOnly: true }
+            - { name: hive-agent-token, mountPath: /var/run/secrets/pragmatic-hive-agent, readOnly: true }
             - name: cfg-tenant-admin
               mountPath: /etc/pragmatic/configuration
               readOnly: true
@@ -773,6 +962,15 @@ spec:
               - secret: { name: pragmatic-postgres-realm-secrets-environments, items: [{ key: password, path: environments }] }
         - name: realm-secrets-reader
           secret: { secretName: pragmatic-postgres-realm-secrets-environments, defaultMode: 288, items: [{ key: database-url, path: database-url }] }
+        # The console's token for the hive agent's internal API only (audience pragmatic-hive-agent, an hour, rotated).
+        - name: hive-agent-token
+          projected:
+            defaultMode: 288
+            sources:
+              - serviceAccountToken:
+                  audience: pragmatic-hive-agent
+                  expirationSeconds: 3600
+                  path: token
         - name: cfg-tenant-admin
           configMap:
             name: pragmatic-config-pragmatic-tenant-admin

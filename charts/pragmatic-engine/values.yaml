@@ -72,6 +72,13 @@ images:
 agent:
   # The platform's agent channel (level connected only).
   channelUrl: https://agent.pragmatic-tech.ai
+  # The platform's trust root the agent pins at enrolment (C3.3): the public half of the platform signing key, published.
+  # An enrolment answer signed under any other key is refused (a staging platform, a tampered answer).
+  trustRoot:
+    publicKey: |
+      -----BEGIN PUBLIC KEY-----
+      MCowBQYDK2VwAyEAdE1EAHq9DfJ16znpp0fqmi9/POakazXiNqkVxxj8otY=
+      -----END PUBLIC KEY-----
 
 preflight:
   enabled: true

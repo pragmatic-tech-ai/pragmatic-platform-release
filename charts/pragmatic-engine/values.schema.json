@@ -104,7 +104,15 @@
     "agent": {
       "type": "object",
       "additionalProperties": false,
-      "properties": { "channelUrl": { "type": "string", "pattern": "^https://" } }
+      "properties": {
+        "channelUrl": { "type": "string", "pattern": "^https://" },
+        "trustRoot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["publicKey"],
+          "properties": { "publicKey": { "type": "string", "pattern": "^-----BEGIN PUBLIC KEY-----" } }
+        }
+      }
     },
     "preflight": {
       "type": "object",

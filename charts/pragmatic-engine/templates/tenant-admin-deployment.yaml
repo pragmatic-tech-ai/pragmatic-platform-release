@@ -112,6 +112,12 @@ spec:
             - { name: PRAGMATIC_TENANT_ADMIN_REALM_SECRETS_ROLES_DIR, value: /run/secrets/realm-secrets-roles }
             - { name: PRAGMATIC_TENANT_ADMIN_REALM_SECRETS_READER_URL_FILE, value: /run/secrets/realm-secrets-reader/database-url }
             {{- end }}
+            {{- if and (not (include "engine.standalone" .)) (not .Values.hosted) }}
+            # "Connect this hive" (C3.3): the agent's internal API, the console's token for it, and the console address.
+            - { name: PRAGMATIC_TENANT_ADMIN_AGENT_URL, value: {{ printf "http://pragmatic-hive-agent-internal.%s.svc:7210" $ns | quote }} }
+            - { name: PRAGMATIC_TENANT_ADMIN_AGENT_TOKEN_FILE, value: /var/run/secrets/pragmatic-hive-agent/token }
+            - { name: PRAGMATIC_TENANT_ADMIN_CONSOLE_ADDRESS, value: {{ .Values.console.address | quote }} }
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /healthz
@@ -136,6 +142,9 @@ spec:
             {{- if not (include "engine.realmSecrets.cloud" .) }}
             - { name: realm-secrets-roles, mountPath: /run/secrets/realm-secrets-roles, readOnly: true }
             - { name: realm-secrets-reader, mountPath: /run/secrets/realm-secrets-reader, readOnly: true }
+            {{- end }}
+            {{- if and (not (include "engine.standalone" .)) (not .Values.hosted) }}
+            - { name: hive-agent-token, mountPath: /var/run/secrets/pragmatic-hive-agent, readOnly: true }
             {{- end }}
             {{- include "engine.configurationMounts" (dict "short" "tenant-admin" "component" "pragmatic-tenant-admin") | nindent 12 }}
       volumes:
@@ -186,6 +195,17 @@ spec:
               - secret: { name: pragmatic-postgres-realm-secrets-environments, items: [{ key: password, path: environments }] }
         - name: realm-secrets-reader
           secret: { secretName: pragmatic-postgres-realm-secrets-environments, defaultMode: 288, items: [{ key: database-url, path: database-url }] }
+        {{- end }}
+        {{- if and (not (include "engine.standalone" .)) (not .Values.hosted) }}
+        # The console's token for the hive agent's internal API only (audience pragmatic-hive-agent, an hour, rotated).
+        - name: hive-agent-token
+          projected:
+            defaultMode: 288
+            sources:
+              - serviceAccountToken:
+                  audience: pragmatic-hive-agent
+                  expirationSeconds: 3600
+                  path: token
         {{- end }}
         {{- include "engine.configurationVolumes" (dict "short" "tenant-admin" "component" "pragmatic-tenant-admin") | nindent 8 }}
 ---

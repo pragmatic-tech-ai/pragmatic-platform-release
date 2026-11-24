@@ -1,0 +1,26 @@
+{{- if and (not (include "engine.standalone" .)) (not .Values.hosted) }}
+{{- $ns := include "engine.namespace" . }}
+{{- $name := include "engine.agentName" . }}
+# Only the engine's console reaches the agent's internal enrolment API (C3.3); nothing else reaches the agent at all.
+# The agent also checks each caller's token (TokenReview: audience pragmatic-hive-agent, the console's account).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      pragmatic/app: {{ $name }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: pragmatic-tenant-admin
+      ports:
+        - protocol: TCP
+          port: 7210
+{{- end }}

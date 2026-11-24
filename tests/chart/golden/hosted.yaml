@@ -91,9 +91,11 @@ spec:
           port: 9443
 ---
 # Source: pragmatic-engine/templates/hive-agent-deployment.yaml
-# The hive agent (level connected): idle until the hive is enrolled (C3.3 writes its token), then it polls the platform's
-# agent channel. Hosted hives (set by the host agent) bind it to cluster-admin; otherwise it gets the placer role, empty in
-# this release (never a read of Secrets, pods/exec, pods/portforward or services/proxy).
+# The hive agent (level connected): it generates the hive's key in the cluster, serves the console's internal enrolment
+# API on 7210 (only the console's pods reach it: hive-agent-networkpolicy.yaml) and, once enrolled, reports over the signed
+# agent channel (C3.3). Hosted hives (set by the host agent) bind it to cluster-admin; otherwise it gets the placer role,
+# empty in this release (never a read of Secrets, pods/exec, pods/portforward or services/proxy), and the narrow Roles of
+# hive-agent-rbac.yaml.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -505,9 +507,13 @@ spec:
         - name: agent
           image: ghcr.io/pragmatic-tech-ai/pragmatic-hive-agent@sha256:68aa7746ab947a2525fea72525fcc9e99db4fe0aa7d8ce9071a597a09397b74e
           terminationMessagePolicy: FallbackToLogsOnError
+          ports:
+            - name: internal
+              containerPort: 7210
           env:
             - { name: PRAGMATIC_AGENT_REGISTRY_URL, value: "https://agent.pragmatic-tech.ai" }
             - { name: PRAGMATIC_AGENT_HIVE_ID, value: "acme-hive" }
+            # Hosted (the host agent places it): the push path's token until host enrolment (C5.1) defines its own.
             - { name: PRAGMATIC_AGENT_TOKEN_FILE, value: /run/secrets/pragmatic-agent-token/token }
           readinessProbe:
             exec:
@@ -542,7 +548,7 @@ spec:
             - name: cfgrun-hive-agent
               mountPath: /run/pragmatic/secrets
       volumes:
-        # Absent until enrolment (C3.3) writes it; the agent waits idle until the token file appears.
+        # Hosted: written by the host agent when it places the hive; the agent waits idle until the token file appears.
         - name: agent-token
           secret: { secretName: pragmatic-hive-acme-hive-agent-token, optional: true, defaultMode: 288, items: [{ key: token, path: token }] }
         - name: tmp

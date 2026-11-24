@@ -270,6 +270,85 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
         assert.ok('release-2026-11.pub.pem' in (ChartFixture.Find(standalone, 'ConfigMap', 'pragmatic-engine-release-keys')?.data ?? {}))
     })
 
+    it('the agent may read only its own identity secret', () =>
+    {
+        const docs = ChartFixture.Render(RenderFixture.Connected)
+        const agent = 'pragmatic-hive-acme-hive-agent'
+        const bound = docs.filter(d => ['RoleBinding', 'ClusterRoleBinding'].includes(d.kind) && (d.subjects as any[]).some(subject => subject.kind === 'ServiceAccount' && subject.name === agent))
+        const roles = bound.map(binding => docs.find(d => d.kind === binding.roleRef.kind && d.metadata.name === binding.roleRef.name && (binding.kind === 'ClusterRoleBinding' || d.metadata.namespace === binding.metadata.namespace))!)
+        assert.ok(roles.every(role => role !== undefined), 'every binding names a rendered role')
+        const secretRules = roles.flatMap(role => (role.rules as any[]).filter(rule => (rule.resources as string[]).includes('secrets')).map(rule => ({ kind: role.kind, rule })))
+        assert.ok(secretRules.length > 0)
+        for (const { kind, rule } of secretRules)
+        {
+            assert.equal(kind, 'Role', 'no cluster-wide Secret access')
+            const reads = (rule.verbs as string[]).filter(verb => verb !== 'create')
+            if (reads.length > 0)
+            {
+                assert.deepEqual(rule.resourceNames, ['pragmatic-hive-identity'])
+                assert.deepEqual(reads.sort(), ['get', 'update'])
+            }
+        }
+        const configMaps = roles.flatMap(role => (role.rules as any[]).filter(rule => (rule.resources as string[]).includes('configmaps')))
+        assert.ok(configMaps.every(rule => (rule.verbs as string[]).every(verb => verb === 'create') || JSON.stringify(rule.resourceNames) === JSON.stringify(['pragmatic-hive-enrolment'])))
+        const reporter = ChartFixture.Find(docs, 'ClusterRole', 'pragmatic-hive-agent-reporter')!
+        assert.deepEqual(reporter.rules, [
+            { apiGroups: ['authentication.k8s.io'], resources: ['tokenreviews'], verbs: ['create'] },
+            { apiGroups: ['apps'], resources: ['deployments'], verbs: ['list'] },
+        ])
+    })
+
+    it('only the console reaches the agent\'s internal port', () =>
+    {
+        const docs = ChartFixture.Render(RenderFixture.Connected)
+        const policy = ChartFixture.Find(docs, 'NetworkPolicy', 'pragmatic-hive-acme-hive-agent')!
+        assert.deepEqual(policy.spec.podSelector.matchLabels, { 'pragmatic/app': 'pragmatic-hive-acme-hive-agent' })
+        assert.deepEqual(policy.spec.ingress, [{ from: [{ podSelector: { matchLabels: { 'app.kubernetes.io/component': 'pragmatic-tenant-admin' } } }], ports: [{ protocol: 'TCP', port: 7210 }] }])
+        const consolePod = ChartFixture.Find(docs, 'Deployment', 'pragmatic-tenant-admin-acme')!.spec.template.metadata.labels
+        assert.equal(consolePod['app.kubernetes.io/component'], 'pragmatic-tenant-admin', 'the console\'s pods carry the label the policy admits')
+        const agentPod = ChartFixture.Find(docs, 'Deployment', 'pragmatic-hive-acme-hive-agent')!.spec.template.metadata.labels
+        assert.notEqual(agentPod['app.kubernetes.io/component'], 'pragmatic-tenant-admin')
+        const service = ChartFixture.Find(docs, 'Service', 'pragmatic-hive-agent-internal')!
+        assert.deepEqual(service.spec.selector, { 'pragmatic/app': 'pragmatic-hive-acme-hive-agent' })
+        assert.deepEqual(service.spec.ports, [{ name: 'internal', port: 7210, targetPort: 'internal' }])
+        const standalone = ChartFixture.Render(RenderFixture.Standalone)
+        assert.equal(ChartFixture.Find(standalone, 'Service', 'pragmatic-hive-agent-internal'), undefined)
+    })
+
+    it('the console mounts a token for audience pragmatic-hive-agent', () =>
+    {
+        const docs = ChartFixture.Render(RenderFixture.Connected)
+        const pod = ChartFixture.Find(docs, 'Deployment', 'pragmatic-tenant-admin-acme')!.spec.template.spec
+        const volume = (pod.volumes as any[]).find(v => v.name === 'hive-agent-token')
+        assert.deepEqual(volume.projected.sources, [{ serviceAccountToken: { audience: 'pragmatic-hive-agent', expirationSeconds: 3600, path: 'token' } }])
+        const container = pod.containers[0]
+        const mount = (container.volumeMounts as any[]).find(m => m.name === 'hive-agent-token')
+        const env = new Map((container.env as any[]).map(e => [e.name, e.value]))
+        assert.equal(env.get('PRAGMATIC_TENANT_ADMIN_AGENT_TOKEN_FILE'), mount.mountPath + '/token')
+        assert.equal(env.get('PRAGMATIC_TENANT_ADMIN_AGENT_URL'), 'http://pragmatic-hive-agent-internal.pragmatic-system.svc:7210')
+        assert.equal(env.get('PRAGMATIC_TENANT_ADMIN_CONSOLE_ADDRESS'), 'own-domain')
+        const agentEnv = new Map((ChartFixture.Find(docs, 'Deployment', 'pragmatic-hive-acme-hive-agent')!.spec.template.spec.containers[0].env as any[]).map(e => [e.name, e.value]))
+        assert.equal(agentEnv.get('PRAGMATIC_AGENT_CONSOLE_SERVICE_ACCOUNT'), pod.serviceAccountName, 'the agent admits exactly the console\'s account')
+        assert.equal(agentEnv.get('PRAGMATIC_AGENT_TENANT'), 'acme')
+        assert.match(String(ChartFixture.Find(docs, 'ConfigMap', 'pragmatic-hive-agent-trust-root')?.data?.['platform.pub.pem']), /^-----BEGIN PUBLIC KEY-----/)
+        const standalonePod = ChartFixture.Find(ChartFixture.Render(RenderFixture.Standalone), 'Deployment', 'pragmatic-tenant-admin-acme')!.spec.template.spec
+        assert.equal((standalonePod.volumes as any[]).some(v => v.name === 'hive-agent-token'), false)
+    })
+
+    it('a hosted hive is never enrolled from its console: no connected agent settings, no enrolment API, the push token', () =>
+    {
+        const docs = ChartFixture.Render(RenderFixture.Hosted)
+        const agent = ChartFixture.Find(docs, 'Deployment', 'pragmatic-hive-acme-hive-agent')!.spec.template.spec
+        const env = new Map((agent.containers[0].env as any[]).map(e => [e.name, e.value]))
+        assert.equal(env.has('PRAGMATIC_AGENT_TRUST_ROOT_FILE'), false)
+        assert.equal(env.get('PRAGMATIC_AGENT_TOKEN_FILE'), '/run/secrets/pragmatic-agent-token/token')
+        assert.ok((agent.volumes as any[]).some(v => v.name === 'agent-token' && v.secret.optional === true))
+        assert.equal(ChartFixture.Find(docs, 'Service', 'pragmatic-hive-agent-internal'), undefined)
+        assert.equal(ChartFixture.Find(docs, 'ClusterRole', 'pragmatic-hive-agent-reporter'), undefined)
+        const consoleEnv = (ChartFixture.Find(docs, 'Deployment', 'pragmatic-tenant-admin-acme')!.spec.template.spec.containers[0].env as any[]).map(e => e.name)
+        assert.equal(consoleEnv.includes('PRAGMATIC_TENANT_ADMIN_AGENT_URL'), false)
+    })
+
     it('helm lint passes on the chart as a release builds it', () =>
     {
         const lint = spawnSync('helm', ['lint', ChartFixture.Chart(), '--namespace', 'pragmatic-system', '--set', 'tenant.id=acme', '--set', 'console.host=console.acme.example', '--set', 'tls.mode=self-signed'], { encoding: 'utf8' })
