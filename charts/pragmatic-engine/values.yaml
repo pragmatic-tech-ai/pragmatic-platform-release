@@ -6,7 +6,9 @@
 
 # connected: the hive agent is installed, idle until the hive is enrolled. standalone: no agent, no dial-home.
 level: connected
-# Set only by the platform's host agent (Hosted hives): binds the agent to cluster-admin.
+# Set only by the platform's host agent (Hosted hives, C5.1; then level connected and console.address
+# relayed-hive-subdomain): the agent enrols itself with the host agent's one-time code (Secret
+# pragmatic-hive-enrolment-code) and is bound to cluster-admin.
 hosted: false
 
 tenant:

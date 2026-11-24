@@ -20,14 +20,14 @@ class MintedSecrets
         'pragmatic-tenant-idp-admin-token', 'pragmatic-tenant-idp-database', 'pragmatic-realm-master-key', 'pragmatic-tenant-idp-realm-secrets',
     ]
     /** The configuration stores the bootstrap creates when absent; the pods mount them optionally. */
-    public static readonly Optional: readonly string[] = ['pragmatic-secrets-pragmatic-tenant-admin', 'pragmatic-secrets-pragmatic-hive-agent', 'pragmatic-secrets-pragmatic-tenant-idp', 'pragmatic-hive-acme-hive-agent-token']
+    public static readonly Optional: readonly string[] = ['pragmatic-secrets-pragmatic-tenant-admin', 'pragmatic-secrets-pragmatic-hive-agent', 'pragmatic-secrets-pragmatic-tenant-idp']
 }
 
 class RenderFixture
 {
     public static readonly Connected = { 'tls.mode': 'self-signed' }
     public static readonly Standalone = { 'tls.mode': 'self-signed', level: 'standalone' }
-    public static readonly Hosted = { 'tls.mode': 'self-signed', hosted: 'true' }
+    public static readonly Hosted = { 'tls.mode': 'self-signed', hosted: 'true', 'console.host': 'acme-k3xq.hives.pragmatic-tech.ai', 'console.address': 'relayed-hive-subdomain' }
     public static readonly HookAnnotation = 'helm.sh/hook'
 
     public static Workloads(docs: readonly K8sDoc[]): string[]
@@ -335,18 +335,33 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
         assert.equal((standalonePod.volumes as any[]).some(v => v.name === 'hive-agent-token'), false)
     })
 
-    it('a hosted hive is never enrolled from its console: no connected agent settings, no enrolment API, the push token', () =>
+    it('a hosted hive enrols itself with the host agent code: connected settings, the relayed console, no enrolment API, no token', () =>
     {
         const docs = ChartFixture.Render(RenderFixture.Hosted)
         const agent = ChartFixture.Find(docs, 'Deployment', 'pragmatic-hive-acme-hive-agent')!.spec.template.spec
         const env = new Map((agent.containers[0].env as any[]).map(e => [e.name, e.value]))
-        assert.equal(env.has('PRAGMATIC_AGENT_TRUST_ROOT_FILE'), false)
-        assert.equal(env.get('PRAGMATIC_AGENT_TOKEN_FILE'), '/run/secrets/pragmatic-agent-token/token')
-        assert.ok((agent.volumes as any[]).some(v => v.name === 'agent-token' && v.secret.optional === true))
+        assert.equal(env.get('PRAGMATIC_AGENT_TRUST_ROOT_FILE'), '/etc/pragmatic/agent-trust-root/platform.pub.pem')
+        assert.equal(env.get('PRAGMATIC_AGENT_TENANT'), 'acme')
+        assert.equal(env.get('PRAGMATIC_AGENT_HOSTED'), 'true')
+        assert.equal(env.get('PRAGMATIC_AGENT_CONSOLE_HOST'), 'acme-k3xq.hives.pragmatic-tech.ai')
+        assert.equal(env.get('PRAGMATIC_AGENT_CONSOLE_ADDRESS'), 'relayed-hive-subdomain')
+        assert.equal(env.has('PRAGMATIC_AGENT_TOKEN_FILE'), false)
+        assert.equal(agent.containers[0].ports, undefined, 'no internal API port')
+        assert.equal((agent.volumes as any[]).some(v => v.name === 'agent-token'), false)
+        assert.match(String(ChartFixture.Find(docs, 'ConfigMap', 'pragmatic-hive-agent-trust-root')?.data?.['platform.pub.pem']), /^-----BEGIN PUBLIC KEY-----/)
         assert.equal(ChartFixture.Find(docs, 'Service', 'pragmatic-hive-agent-internal'), undefined)
+        assert.equal(ChartFixture.Find(docs, 'NetworkPolicy', 'pragmatic-hive-agent-internal'), undefined)
         assert.equal(ChartFixture.Find(docs, 'ClusterRole', 'pragmatic-hive-agent-reporter'), undefined)
+        const connectedAgent = ChartFixture.Find(ChartFixture.Render(RenderFixture.Connected), 'Deployment', 'pragmatic-hive-acme-hive-agent')!.spec.template.spec
+        assert.equal((connectedAgent.containers[0].env as any[]).some(e => e.name === 'PRAGMATIC_AGENT_HOSTED'), false)
         const consoleEnv = (ChartFixture.Find(docs, 'Deployment', 'pragmatic-tenant-admin-acme')!.spec.template.spec.containers[0].env as any[]).map(e => e.name)
         assert.equal(consoleEnv.includes('PRAGMATIC_TENANT_ADMIN_AGENT_URL'), false)
+    })
+
+    it('hosted is refused unless connected with the relayed console address', () =>
+    {
+        assert.match(ChartFixture.Refusal({ ...RenderFixture.Hosted, 'console.address': 'own-domain' }), /\/console\/address': value must be 'relayed-hive-subdomain'/)
+        assert.match(ChartFixture.Refusal({ ...RenderFixture.Hosted, level: 'standalone' }), /\/level': value must be 'connected'/)
     })
 
     it('helm lint passes on the chart as a release builds it', () =>

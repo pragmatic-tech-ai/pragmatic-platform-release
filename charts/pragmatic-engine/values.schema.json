@@ -4,6 +4,14 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["level", "tenant", "console", "tls", "images"],
+  "if": { "properties": { "hosted": { "const": true } }, "required": ["hosted"] },
+  "then": {
+    "description": "A Hosted engine (placed by the host agent, C5.1) is connected and its console relayed under hives.pragmatic-tech.ai.",
+    "properties": {
+      "level": { "const": "connected" },
+      "console": { "properties": { "address": { "const": "relayed-hive-subdomain" } } }
+    }
+  },
   "definitions": {
     "resources": {
       "type": "object",

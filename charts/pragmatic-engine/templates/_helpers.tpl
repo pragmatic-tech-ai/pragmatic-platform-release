@@ -40,7 +40,6 @@ the hive agent pragmatic-hive-<hive>-agent, all in pragmatic-system.
 {{- define "engine.idpInternalUrl" -}}https://{{ include "engine.idpInternalHost" . }}:9443{{- end -}}
 {{- define "engine.idpBrowserUrl" -}}https://{{ include "engine.idpHost" . }}{{ include "engine.portSuffix" . }}{{- end -}}
 {{- define "engine.agentName" -}}pragmatic-hive-{{ include "engine.hive" . }}-agent{{- end -}}
-{{- define "engine.agentTokenSecret" -}}pragmatic-hive-{{ include "engine.hive" . }}-agent-token{{- end -}}
 
 {{/* The console's TLS Secret: the operator's, or the minted self-signed one. */}}
 {{- define "engine.consoleTlsSecret" -}}

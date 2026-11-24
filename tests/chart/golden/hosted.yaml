@@ -93,7 +93,8 @@ spec:
 # Source: pragmatic-engine/templates/hive-agent-deployment.yaml
 # The hive agent (level connected): it generates the hive's key in the cluster, serves the console's internal enrolment
 # API on 7210 (only the console's pods reach it: hive-agent-networkpolicy.yaml) and, once enrolled, reports over the signed
-# agent channel (C3.3). Hosted hives (set by the host agent) bind it to cluster-admin; otherwise it gets the placer role,
+# agent channel (C3.3). Hosted hives (set by the host agent, C5.1) enrol themselves with the host agent's one-time code
+# (Secret pragmatic-hive-enrolment-code), serve no internal API and bind it to cluster-admin; otherwise it gets the placer role,
 # empty in this release (never a read of Secrets, pods/exec, pods/portforward or services/proxy), and the narrow Roles of
 # hive-agent-rbac.yaml.
 apiVersion: v1
@@ -148,6 +149,18 @@ data:
   pragmatic-tenant-admin.json: "{\"component\":\"pragmatic-tenant-admin\",\"schema\":1}"
   pragmatic-tenant-idp.json: "{\"component\":\"pragmatic-tenant-idp\",\"schema\":1}"
   pragmatic-ui-unpack.json: "{\"component\":\"pragmatic-ui-unpack\",\"schema\":1}"
+---
+# Source: pragmatic-engine/templates/hive-agent-deployment.yaml
+# The platform's trust root the agent pins at enrolment (public, values agent.trustRoot.publicKey).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pragmatic-hive-agent-trust-root
+  namespace: pragmatic-system
+  labels:
+    pragmatic/hive: acme-hive
+data:
+  platform.pub.pem: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAdE1EAHq9DfJ16znpp0fqmi9/POakazXiNqkVxxj8otY=\n-----END PUBLIC KEY-----\n"
 ---
 # Source: pragmatic-engine/templates/postgres-applications-configmap.yaml
 apiVersion: v1
@@ -507,14 +520,23 @@ spec:
         - name: agent
           image: ghcr.io/pragmatic-tech-ai/pragmatic-hive-agent@sha256:68aa7746ab947a2525fea72525fcc9e99db4fe0aa7d8ce9071a597a09397b74e
           terminationMessagePolicy: FallbackToLogsOnError
-          ports:
-            - name: internal
-              containerPort: 7210
           env:
             - { name: PRAGMATIC_AGENT_REGISTRY_URL, value: "https://agent.pragmatic-tech.ai" }
             - { name: PRAGMATIC_AGENT_HIVE_ID, value: "acme-hive" }
-            # Hosted (the host agent places it): the push path's token until host enrolment (C5.1) defines its own.
-            - { name: PRAGMATIC_AGENT_TOKEN_FILE, value: /run/secrets/pragmatic-agent-token/token }
+            - { name: PRAGMATIC_AGENT_TENANT, value: "acme" }
+            - { name: PRAGMATIC_AGENT_ENGINE_VERSION, value: "0.0.0" }
+            - { name: PRAGMATIC_AGENT_TRUST_ROOT_FILE, value: /etc/pragmatic/agent-trust-root/platform.pub.pem }
+            - { name: PRAGMATIC_AGENT_NAMESPACE, value: "pragmatic-system" }
+            - { name: PRAGMATIC_AGENT_CONSOLE_SERVICE_ACCOUNT, value: "pragmatic-tenant-admin-acme" }
+            - { name: PRAGMATIC_AGENT_CONSOLE_DEPLOYMENT, value: "pragmatic-tenant-admin-acme" }
+            - { name: PRAGMATIC_AGENT_IDP_NAMESPACE, value: "pragmatic-idp-acme" }
+            - { name: PRAGMATIC_AGENT_IDP_DEPLOYMENT, value: "pragmatic-idp-acme" }
+            - { name: PRAGMATIC_AGENT_POSTGRES_STATEFULSET, value: pragmatic-postgres }
+            # Hosted (C5.1, placed by the platform's host agent): the agent enrols itself at level hosted with the one-time
+            # code the host agent wrote into the Secret pragmatic-hive-enrolment-code, under the relayed console address.
+            - { name: PRAGMATIC_AGENT_HOSTED, value: "true" }
+            - { name: PRAGMATIC_AGENT_CONSOLE_HOST, value: "acme-k3xq.hives.pragmatic-tech.ai" }
+            - { name: PRAGMATIC_AGENT_CONSOLE_ADDRESS, value: "relayed-hive-subdomain" }
           readinessProbe:
             exec:
               command: ["test", "-f", "/tmp/pragmatic-ready"]
@@ -537,7 +559,7 @@ spec:
               cpu: 20m
               memory: 64Mi
           volumeMounts:
-            - { name: agent-token, mountPath: /run/secrets/pragmatic-agent-token, readOnly: true }
+            - { name: trust-root, mountPath: /etc/pragmatic/agent-trust-root, readOnly: true }
             - { name: tmp, mountPath: /tmp }
             - name: cfg-hive-agent
               mountPath: /etc/pragmatic/configuration
@@ -548,9 +570,9 @@ spec:
             - name: cfgrun-hive-agent
               mountPath: /run/pragmatic/secrets
       volumes:
-        # Hosted: written by the host agent when it places the hive; the agent waits idle until the token file appears.
-        - name: agent-token
-          secret: { secretName: pragmatic-hive-acme-hive-agent-token, optional: true, defaultMode: 288, items: [{ key: token, path: token }] }
+        # The platform's trust root the agent pins at enrolment (public).
+        - name: trust-root
+          configMap: { name: pragmatic-hive-agent-trust-root, items: [{ key: platform.pub.pem, path: platform.pub.pem }] }
         - name: tmp
           emptyDir: {}
         - name: cfg-hive-agent
@@ -641,13 +663,13 @@ spec:
             - { name: PRAGMATIC_TENANT_ADMIN_DATA_ROOT, value: /data }
             - { name: PRAGMATIC_TENANT_ADMIN_PORT, value: "7100" }
             - { name: PRAGMATIC_TENANT_ADMIN_BIND, value: 0.0.0.0 }
-            - { name: PRAGMATIC_TENANT_ADMIN_BASE_DOMAIN, value: "acme.example" }
+            - { name: PRAGMATIC_TENANT_ADMIN_BASE_DOMAIN, value: "hives.pragmatic-tech.ai" }
             - { name: PRAGMATIC_TENANT_ADMIN_EXTERNAL_SCHEME, value: https }
             - { name: PRAGMATIC_TENANT_ADMIN_SECURE_COOKIE, value: "true" }
             - { name: PRAGMATIC_TENANT_ADMIN_TRUSTED_PROXY, value: "true" }
             - { name: PRAGMATIC_TENANT_ADMIN_DEPLOYMENT, value: "pragmatic-tenant-admin-acme" }
-            - { name: PRAGMATIC_TENANT_ADMIN_CONSOLE_HOST, value: "console.acme.example" }
-            - { name: PRAGMATIC_IDP_BROWSER_BASE_URL, value: "https://idp-acme.acme.example" }
+            - { name: PRAGMATIC_TENANT_ADMIN_CONSOLE_HOST, value: "acme-k3xq.hives.pragmatic-tech.ai" }
+            - { name: PRAGMATIC_IDP_BROWSER_BASE_URL, value: "https://idp-acme.hives.pragmatic-tech.ai" }
             - { name: PRAGMATIC_IDP_BASE_URL, value: "https://pragmatic-idp-acme.pragmatic-idp-acme.svc.cluster.local:9443" }
             - { name: PRAGMATIC_IDP_CA_FILE, value: /idp/ca/ca.crt }
             - { name: PRAGMATIC_IDP_ADMIN_TOKEN_FILE, value: /idp/token/admin-token }
@@ -831,7 +853,7 @@ spec:
               containerPort: 9443
           env:
             - { name: PRAGMATIC_IDP_PORT, value: "9443" }
-            - { name: PRAGMATIC_IDP_BASE_URL, value: "https://idp-acme.acme.example" }
+            - { name: PRAGMATIC_IDP_BASE_URL, value: "https://idp-acme.hives.pragmatic-tech.ai" }
             - { name: PRAGMATIC_IDP_INTERNAL_URL, value: "https://pragmatic-idp-acme.pragmatic-idp-acme.svc.cluster.local:9443" }
             - { name: PRAGMATIC_IDP_HOST, value: 0.0.0.0 }
             - { name: PRAGMATIC_IDP_DATA, value: /idp-data }
@@ -1049,10 +1071,10 @@ metadata:
 spec:
   
   tls:
-    - hosts: ["console.acme.example"]
+    - hosts: ["acme-k3xq.hives.pragmatic-tech.ai"]
       secretName: pragmatic-console-tls
   rules:
-    - host: "console.acme.example"
+    - host: "acme-k3xq.hives.pragmatic-tech.ai"
       http:
         paths:
           - path: /
@@ -1082,10 +1104,10 @@ metadata:
 spec:
   
   tls:
-    - hosts: ["idp-acme.acme.example"]
+    - hosts: ["idp-acme.hives.pragmatic-tech.ai"]
       secretName: pragmatic-console-tls
   rules:
-    - host: "idp-acme.acme.example"
+    - host: "idp-acme.hives.pragmatic-tech.ai"
       http:
         paths:
           - path: /
@@ -1470,13 +1492,13 @@ spec:
             - { name: PRAGMATIC_BOOTSTRAP_TENANT_NAME, value: "acme" }
             - { name: PRAGMATIC_BOOTSTRAP_HIVE_ID, value: "acme-hive" }
             - { name: PRAGMATIC_BOOTSTRAP_HIVE_LABEL, value: "acme-hive" }
-            - { name: PRAGMATIC_BOOTSTRAP_CONSOLE_HOST, value: "console.acme.example" }
-            - { name: PRAGMATIC_BOOTSTRAP_BASE_DOMAIN, value: "acme.example" }
-            - { name: PRAGMATIC_BOOTSTRAP_IDP_HOST, value: "idp-acme.acme.example" }
+            - { name: PRAGMATIC_BOOTSTRAP_CONSOLE_HOST, value: "acme-k3xq.hives.pragmatic-tech.ai" }
+            - { name: PRAGMATIC_BOOTSTRAP_BASE_DOMAIN, value: "hives.pragmatic-tech.ai" }
+            - { name: PRAGMATIC_BOOTSTRAP_IDP_HOST, value: "idp-acme.hives.pragmatic-tech.ai" }
             - { name: PRAGMATIC_BOOTSTRAP_IDP_INTERNAL_HOST, value: "pragmatic-idp-acme.pragmatic-idp-acme.svc.cluster.local" }
             - { name: PRAGMATIC_BOOTSTRAP_TLS_MODE, value: "self-signed" }
             - { name: PRAGMATIC_BOOTSTRAP_TLS_SECRET, value: "" }
-            - { name: PRAGMATIC_BOOTSTRAP_OWNER_EMAIL, value: "owner@acme.example" }
+            - { name: PRAGMATIC_BOOTSTRAP_OWNER_EMAIL, value: "owner@hives.pragmatic-tech.ai" }
           securityContext:
             runAsNonRoot: true
             runAsUser: 10001
@@ -1536,13 +1558,13 @@ spec:
             - { name: PRAGMATIC_BOOTSTRAP_TENANT_NAME, value: "acme" }
             - { name: PRAGMATIC_BOOTSTRAP_HIVE_ID, value: "acme-hive" }
             - { name: PRAGMATIC_BOOTSTRAP_HIVE_LABEL, value: "acme-hive" }
-            - { name: PRAGMATIC_BOOTSTRAP_CONSOLE_HOST, value: "console.acme.example" }
-            - { name: PRAGMATIC_BOOTSTRAP_BASE_DOMAIN, value: "acme.example" }
-            - { name: PRAGMATIC_BOOTSTRAP_IDP_HOST, value: "idp-acme.acme.example" }
+            - { name: PRAGMATIC_BOOTSTRAP_CONSOLE_HOST, value: "acme-k3xq.hives.pragmatic-tech.ai" }
+            - { name: PRAGMATIC_BOOTSTRAP_BASE_DOMAIN, value: "hives.pragmatic-tech.ai" }
+            - { name: PRAGMATIC_BOOTSTRAP_IDP_HOST, value: "idp-acme.hives.pragmatic-tech.ai" }
             - { name: PRAGMATIC_BOOTSTRAP_IDP_INTERNAL_HOST, value: "pragmatic-idp-acme.pragmatic-idp-acme.svc.cluster.local" }
             - { name: PRAGMATIC_BOOTSTRAP_TLS_MODE, value: "self-signed" }
             - { name: PRAGMATIC_BOOTSTRAP_TLS_SECRET, value: "" }
-            - { name: PRAGMATIC_BOOTSTRAP_OWNER_EMAIL, value: "owner@acme.example" }
+            - { name: PRAGMATIC_BOOTSTRAP_OWNER_EMAIL, value: "owner@hives.pragmatic-tech.ai" }
           securityContext:
             runAsNonRoot: true
             runAsUser: 10001
@@ -1608,11 +1630,11 @@ spec:
             - name: PRAGMATIC_PREFLIGHT_INGRESS_CLASS
               value: ""
             - name: PRAGMATIC_PREFLIGHT_CONSOLE_HOST
-              value: "console.acme.example"
+              value: "acme-k3xq.hives.pragmatic-tech.ai"
             - name: PRAGMATIC_PREFLIGHT_IDP_HOST
-              value: "idp-acme.acme.example"
+              value: "idp-acme.hives.pragmatic-tech.ai"
             - name: PRAGMATIC_PREFLIGHT_BASE_DOMAIN
-              value: "acme.example"
+              value: "hives.pragmatic-tech.ai"
             # azure and aws fetch the cluster's service-account issuer publicly: the workload-identity-issuer check.
             - name: PRAGMATIC_PREFLIGHT_REALM_SECRETS_OPTION
               value: "custom"
@@ -1621,7 +1643,7 @@ spec:
             - name: PRAGMATIC_PREFLIGHT_HIVE_ID
               value: "acme-hive"
             - name: PRAGMATIC_PREFLIGHT_CONSOLE_ADDRESS
-              value: "own-domain"
+              value: "relayed-hive-subdomain"
             - name: PRAGMATIC_PREFLIGHT_TLS_MODE
               value: "self-signed"
             - name: PRAGMATIC_PREFLIGHT_TLS_SECRET
