@@ -125,6 +125,8 @@ spec:
             # Pull-only management (C3.4): the only caller of the internal intent endpoint on 7211 (TokenReview, audience
             # pragmatic-tenant-admin).
             - { name: PRAGMATIC_ENGINE_AGENT_SERVICE_ACCOUNT, value: {{ printf "system:serviceaccount:%s:%s" $ns (include "engine.agentName" .) | quote }} }
+            # The engine's release version: the only version an environment intent may name.
+            - { name: PRAGMATIC_ENGINE_VERSION, value: {{ .Chart.Version | quote }} }
             {{- end }}
           readinessProbe:
             httpGet:

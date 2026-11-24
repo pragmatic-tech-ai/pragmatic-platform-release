@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { parseAllDocuments } from 'yaml'
+import { evaluate } from '@marcbachmann/cel-js'
 import { ChartFixture, type K8sDoc } from './chart-fixture.js'
 
 /** The Secrets the console's bootstrap mints (pragmatic-tenant-admin EngineSecretSet), by namespace scope. */
@@ -23,43 +24,69 @@ class MintedSecrets
     public static readonly Optional: readonly string[] = ['pragmatic-secrets-pragmatic-tenant-admin', 'pragmatic-secrets-pragmatic-hive-agent', 'pragmatic-secrets-pragmatic-tenant-idp']
 }
 
+/** One admission request to the agent's policy: who, what, the object before and after. */
+type AdmissionCase = { Operation: 'CREATE' | 'UPDATE' | 'DELETE', Group: string, Resource: string, Namespace: string, Object: any, OldObject: any, Username?: string }
+
 /**
- * The agent admission policy's expressions read the way the API server reads them, for the parts a template test can
- * evaluate: the image pattern (a CEL raw string, RE2; the pattern uses no feature where RE2 and JavaScript differ), the
- * namespace list and prefix, and the managed-by values. The full policy is proved live (C3.4 Task 8, kubectl --as).
+ * The hive agent's ValidatingAdmissionPolicy, evaluated as the API server evaluates it (cel-js: the CEL macros the policy
+ * uses): the match conditions, then the variables in order, then every validation. The resource rules are assumed matched
+ * (the cases name matched resources). The live dry-run is C3.4 Task 8's.
  */
-class AgentPolicyExpressions
+class AgentPolicy
 {
-    private static readonly ImagePattern = /matches\(r'([^']+)'\)/
-    private static readonly NamespaceList = /variables\.namespace in \[([^\]]+)\]/
-    private static readonly NamespacePrefix = /variables\.namespace\.startsWith\('([^']+)'\)/
-    private static readonly ManagedList = /\['app\.kubernetes\.io\/managed-by'\] in \[([^\]]+)\]/
-    private readonly text: string
+    public static readonly Agent = 'system:serviceaccount:pragmatic-system:pragmatic-hive-acme-hive-agent'
 
-    public constructor(validations: Array<{ expression: string }>)
+    public constructor(private readonly policy: K8sDoc)
     {
-        this.text = validations.map(v => v.expression).join('\n')
     }
 
-    public ImageAllowed(image: string): boolean
+    /** The messages of the validations that deny the case (empty: admitted); null when the policy does not match it. */
+    public Denials(test: AdmissionCase): string[] | null
     {
-        return new RegExp(AgentPolicyExpressions.ImagePattern.exec(this.text)![1]!).test(image)
+        const request = {
+            operation: test.Operation, namespace: test.Namespace, resource: { group: test.Group, version: 'v1', resource: test.Resource },
+            userInfo: { username: test.Username ?? AgentPolicy.Agent },
+        }
+        const context: Record<string, unknown> = { request, object: test.Object, oldObject: test.OldObject, variables: {} }
+        for (const condition of this.policy.spec.matchConditions as Array<{ expression: string }>)
+        {
+            if (evaluate(condition.expression, context) !== true)
+            {
+                return null
+            }
+        }
+        const variables: Record<string, unknown> = {}
+        for (const variable of this.policy.spec.variables as Array<{ name: string, expression: string }>)
+        {
+            variables[variable.name] = evaluate(variable.expression, { ...context, variables })
+        }
+        const denials: string[] = []
+        for (const validation of this.policy.spec.validations as Array<{ expression: string, message: string }>)
+        {
+            let admitted: boolean
+            try
+            {
+                admitted = evaluate(validation.expression, { ...context, variables }) === true
+            }
+            catch
+            {
+                // An expression that cannot be evaluated denies (failurePolicy Fail).
+                admitted = false
+            }
+            if (!admitted)
+            {
+                denials.push(validation.message)
+            }
+        }
+        return denials
     }
 
-    public NamespaceAllowed(namespace: string): boolean
+    /** A copy of a rendered object, changed by `change`. */
+    public static Changed<T>(object: T, change: (copy: any) => void): T
     {
-        const listed = AgentPolicyExpressions.Quoted(AgentPolicyExpressions.NamespaceList.exec(this.text)![1]!)
-        return listed.includes(namespace) || namespace.startsWith(AgentPolicyExpressions.NamespacePrefix.exec(this.text)![1]!)
-    }
-
-    public ManagedBy(): string[]
-    {
-        return AgentPolicyExpressions.Quoted(AgentPolicyExpressions.ManagedList.exec(this.text)![1]!)
-    }
-
-    private static Quoted(list: string): string[]
-    {
-        return list.split(',').map(entry => entry.trim().replace(/^'|'$/g, ''))
+        const copy = JSON.parse(JSON.stringify(object)) as T
+        change(copy)
+        return copy
     }
 }
 
@@ -178,21 +205,10 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
     it('the placer role grants no read of secrets and no exec, port-forward, proxy or logs', () =>
     {
         const placer = ChartFixture.Find(ChartFixture.Render(RenderFixture.Connected), 'ClusterRole', 'pragmatic-hive-agent-placer')!
-        const rules = placer.rules as Array<{ apiGroups: string[], resources: string[], verbs: string[] }>
-        const granted = rules.flatMap(rule => rule.resources.map(resource => ({ resource, verbs: rule.verbs })))
-        for (const forbidden of ['pods', 'pods/exec', 'pods/portforward', 'pods/log', 'pods/attach', 'services/proxy', 'nodes/proxy', 'nodes'])
-        {
-            assert.equal(granted.some(entry => entry.resource === forbidden), false, forbidden)
-        }
-        assert.ok(granted.every(entry => !entry.verbs.includes('*') && !entry.resource.includes('*')))
-        const secrets = granted.filter(entry => entry.resource === 'secrets').flatMap(entry => entry.verbs)
-        assert.deepEqual([...secrets].sort(), ['create', 'delete', 'patch'], 'Secrets placed, never read')
-        const reads = granted.filter(entry => entry.verbs.some(verb => ['get', 'list', 'watch'].includes(verb))).map(entry => entry.resource).sort()
-        assert.deepEqual(reads, ['deployments', 'namespaces', 'statefulsets'])
-        for (const placed of ['deployments', 'statefulsets', 'services', 'configmaps', 'ingresses', 'networkpolicies', 'serviceaccounts', 'persistentvolumeclaims', 'namespaces'])
-        {
-            assert.ok(granted.some(entry => entry.resource === placed && ['create', 'update', 'patch', 'delete'].every(verb => entry.verbs.includes(verb))), placed)
-        }
+        assert.deepEqual(placer.rules, [
+            { apiGroups: ['apps'], resources: ['deployments'], resourceNames: ['pragmatic-tenant-admin-acme', 'pragmatic-hive-acme-hive-agent', 'pragmatic-idp-acme'], verbs: ['get', 'patch', 'update'] },
+            { apiGroups: ['apps'], resources: ['statefulsets'], resourceNames: ['pragmatic-postgres'], verbs: ['get', 'patch', 'update'] },
+        ], 'only the engine\'s four workloads, by name: no Secrets or ConfigMaps (create-only stays on the namespaced Role), no list or watch, nothing on pods or proxies')
     })
 
     it('the admission policy is rendered unless hosted', () =>
@@ -200,12 +216,13 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
         const connected = ChartFixture.Render(RenderFixture.Connected)
         const policy = ChartFixture.Find(connected, 'ValidatingAdmissionPolicy', 'pragmatic-hive-acme-hive-agent')!
         assert.equal(policy.spec.failurePolicy, 'Fail')
-        assert.deepEqual(policy.spec.matchConditions, [{ name: 'hive-agent-service-account', expression: "request.userInfo.username == 'system:serviceaccount:pragmatic-system:pragmatic-hive-acme-hive-agent'" }])
         const binding = ChartFixture.Find(connected, 'ValidatingAdmissionPolicyBinding', 'pragmatic-hive-acme-hive-agent')!
         assert.deepEqual(binding.spec, { policyName: 'pragmatic-hive-acme-hive-agent', validationActions: ['Deny'] })
-        const placerResources = (ChartFixture.Find(connected, 'ClusterRole', 'pragmatic-hive-agent-placer')!.rules as any[]).flatMap(rule => rule.resources as string[])
         const fenced = (policy.spec.matchConstraints.resourceRules as any[]).flatMap(rule => rule.resources as string[])
-        assert.ok(placerResources.every(resource => fenced.includes(resource)), 'every resource the agent may place is fenced')
+        for (const resource of ['namespaces', 'secrets', 'configmaps', 'deployments', 'statefulsets', 'leases', 'pods', 'jobs', 'rolebindings'])
+        {
+            assert.ok(fenced.includes(resource), resource)
+        }
         for (const values of [RenderFixture.Hosted, RenderFixture.Standalone])
         {
             const docs = ChartFixture.Render(values)
@@ -216,30 +233,92 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
 
     it('the policy\'s CEL expressions accept a managed digest image and reject a tag, another registry and another namespace', () =>
     {
-        const policy = ChartFixture.Find(ChartFixture.Render(RenderFixture.Connected), 'ValidatingAdmissionPolicy', 'pragmatic-hive-acme-hive-agent')!
-        const cel = new AgentPolicyExpressions(policy.spec.validations as Array<{ expression: string }>)
-        const digest = '@sha256:' + 'a'.repeat(64)
-        assert.ok(cel.ImageAllowed('ghcr.io/pragmatic-tech-ai/pragmatic-tenant-admin' + digest))
-        assert.ok(cel.ImageAllowed('registry.pragmatic-tech.ai/pragmatic-tech-ai/pragmatic-postgres' + digest))
-        assert.equal(cel.ImageAllowed('ghcr.io/pragmatic-tech-ai/pragmatic-tenant-admin:0.1.13'), false, 'a tag')
-        assert.equal(cel.ImageAllowed('docker.io/pragmatic-tech-ai/pragmatic-tenant-admin' + digest), false, 'another registry')
-        assert.equal(cel.ImageAllowed('ghcr.io/someone-else/pragmatic-tenant-admin' + digest), false, 'another organisation')
-        assert.equal(cel.ImageAllowed('ghcr.io/pragmatic-tech-ai/x:1@sha256:' + 'a'.repeat(63)), false, 'a short digest')
-        assert.ok(cel.NamespaceAllowed('pragmatic-system'))
-        assert.ok(cel.NamespaceAllowed('pragmatic-idp-acme'))
-        assert.ok(cel.NamespaceAllowed('pragmatic-env-prod'))
-        assert.equal(cel.NamespaceAllowed('kube-system'), false)
-        assert.equal(cel.NamespaceAllowed('default'), false)
-        assert.deepEqual(cel.ManagedBy(), ['pragmatic-hive-agent', 'pragmatic-tenant-admin', 'pragmatic-engine'])
-        // The engine's own workloads carry a managed-by the policy admits, so the agent can move them.
         const docs = ChartFixture.Render(RenderFixture.Connected)
+        const policy = new AgentPolicy(ChartFixture.Find(docs, 'ValidatingAdmissionPolicy', 'pragmatic-hive-acme-hive-agent')!)
+        const console = ChartFixture.Find(docs, 'Deployment', 'pragmatic-tenant-admin-acme')!
+        const agent = ChartFixture.Find(docs, 'Deployment', 'pragmatic-hive-acme-hive-agent')!
+        const postgres = ChartFixture.Find(docs, 'StatefulSet', 'pragmatic-postgres')!
+        const digest = '@sha256:' + 'e'.repeat(64)
+        const moved = (workload: K8sDoc, image: string): K8sDoc => AgentPolicy.Changed(workload, copy =>
+        {
+            for (const container of [...copy.spec.template.spec.containers, ...(copy.spec.template.spec.initContainers ?? [])])
+            {
+                container.image = image
+            }
+        })
+        const update = (old: K8sDoc, next: K8sDoc, resource = 'deployments'): AdmissionCase => ({ Operation: 'UPDATE', Group: 'apps', Resource: resource, Namespace: 'pragmatic-system', Object: next, OldObject: old })
+
+        // Admitted: an image-only move of each engine workload by digest, and a restart annotation.
+        assert.deepEqual(policy.Denials(update(console, moved(console, 'ghcr.io/pragmatic-tech-ai/pragmatic-tenant-admin' + digest))), [])
+        assert.deepEqual(policy.Denials(update(agent, moved(agent, 'registry.pragmatic-tech.ai/pragmatic-tech-ai/pragmatic-hive-agent' + digest))), [])
+        assert.deepEqual(policy.Denials(update(postgres, moved(postgres, 'ghcr.io/pragmatic-tech-ai/pragmatic-postgres' + digest), 'statefulsets')), [])
+        assert.deepEqual(policy.Denials(update(agent, AgentPolicy.Changed(agent, copy => { copy.spec.template.metadata.annotations = { 'kubectl.kubernetes.io/restartedAt': '2026-11-25T00:00:00Z' } }))), [])
+
+        // Images: a tag (also in an init container), another registry, another organisation.
+        const taggedInit = AgentPolicy.Changed(console, copy => { copy.spec.template.spec.initContainers[0].image = 'ghcr.io/pragmatic-tech-ai/pragmatic-tenant-admin:0.1.13' })
+        assert.equal(policy.Denials(update(console, taggedInit))?.length, 1)
+        assert.equal(policy.Denials(update(agent, moved(agent, 'docker.io/pragmatic-tech-ai/pragmatic-hive-agent' + digest)))?.length, 1)
+        assert.equal(policy.Denials(update(agent, moved(agent, 'ghcr.io/someone-else/pragmatic-hive-agent' + digest)))?.length, 1)
+
+        // "Look by placing": a shell command, an env from a Secret, another Secret mounted, another account, hostPath,
+        // privileged, host network, added capabilities.
+        const looks: Array<[string, (copy: any) => void]> = [
+            ['command', copy => { copy.spec.template.spec.containers[0].command = ['sh', '-c', 'cat /run/secrets/*'] }],
+            ['envFrom', copy => { copy.spec.template.spec.containers[0].envFrom = [{ secretRef: { name: 'pragmatic-postgres-superuser' } }] }],
+            ['env', copy => { copy.spec.template.spec.containers[0].env = [...(copy.spec.template.spec.containers[0].env ?? []), { name: 'X', valueFrom: { secretKeyRef: { name: 'pragmatic-owner-initial', key: 'password' } } }] }],
+            ['volume', copy => { copy.spec.template.spec.volumes = [...(copy.spec.template.spec.volumes ?? []), { name: 'steal', secret: { secretName: 'pragmatic-postgres-superuser' } }] }],
+            ['service account', copy => { copy.spec.template.spec.serviceAccountName = 'pragmatic-tenant-admin-acme' }],
+            ['hostPath', copy => { copy.spec.template.spec.volumes = [...(copy.spec.template.spec.volumes ?? []), { name: 'host', hostPath: { path: '/' } }] }],
+            ['privileged', copy => { copy.spec.template.spec.containers[0].securityContext = { privileged: true } }],
+            ['hostNetwork', copy => { copy.spec.template.spec.hostNetwork = true }],
+            ['capabilities', copy => { copy.spec.template.spec.containers[0].securityContext = { ...copy.spec.template.spec.containers[0].securityContext, capabilities: { add: ['SYS_ADMIN'] } } }],
+            ['another container', copy => { copy.spec.template.spec.containers.push({ name: 'shell', image: copy.spec.template.spec.containers[0].image }) }],
+        ]
+        for (const [name, change] of looks)
+        {
+            assert.ok((policy.Denials(update(agent, AgentPolicy.Changed(agent, change))) ?? []).length > 0, name)
+        }
+
+        // Create, delete, another namespace, another workload.
+        assert.ok((policy.Denials({ Operation: 'CREATE', Group: 'apps', Resource: 'deployments', Namespace: 'pragmatic-system', Object: agent, OldObject: null }) ?? []).length > 0, 'CREATE')
+        assert.ok((policy.Denials({ Operation: 'DELETE', Group: 'apps', Resource: 'deployments', Namespace: 'pragmatic-system', Object: null, OldObject: agent }) ?? []).length > 0, 'DELETE')
+        const elsewhere = AgentPolicy.Changed(agent, copy => { copy.metadata.namespace = 'kube-system' })
+        assert.ok((policy.Denials({ ...update(elsewhere, moved(elsewhere, 'ghcr.io/pragmatic-tech-ai/pragmatic-hive-agent' + digest)), Namespace: 'kube-system' }) ?? []).length > 0, 'another namespace')
+        const env = AgentPolicy.Changed(console, copy => { copy.metadata.name = 'server'; copy.metadata.namespace = 'pragmatic-env-prod' })
+        assert.ok((policy.Denials({ ...update(env, moved(env, 'ghcr.io/pragmatic-tech-ai/pragmatic-env-server' + digest)), Namespace: 'pragmatic-env-prod' }) ?? []).length > 0, 'an environment is the console\'s')
+
+        // A takeover by adding the managed-by label: required before as well as after.
+        const unmanaged = AgentPolicy.Changed(agent, copy => { delete copy.metadata.labels['app.kubernetes.io/managed-by'] })
+        assert.ok((policy.Denials(update(unmanaged, moved(agent, 'ghcr.io/pragmatic-tech-ai/pragmatic-hive-agent' + digest))) ?? []).length > 0, 'UPDATE adding the label')
+
+        // Namespaces: never, with or without Pod Security labels.
+        for (const labels of [{}, { 'pod-security.kubernetes.io/enforce': 'restricted', 'pragmatic/hive': 'acme-hive' }])
+        {
+            const namespace = { apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'pragmatic-env-x', labels } }
+            assert.ok((policy.Denials({ Operation: 'CREATE', Group: '', Resource: 'namespaces', Namespace: '', Object: namespace, OldObject: null }) ?? []).length > 0, 'namespace CREATE')
+            assert.ok((policy.Denials({ Operation: 'UPDATE', Group: '', Resource: 'namespaces', Namespace: '', Object: namespace, OldObject: namespace }) ?? []).length > 0, 'namespace UPDATE')
+        }
+
+        // Its own objects: by name, labelled; an unlabelled old one may be labelled (a C3.3 enrolment ConfigMap), never deleted.
+        const own = { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'pragmatic-hive-enrolment', namespace: 'pragmatic-system', labels: { 'app.kubernetes.io/managed-by': 'pragmatic-hive-agent' } } }
+        const bare = { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'pragmatic-hive-enrolment', namespace: 'pragmatic-system' } }
+        const configMap = (operation: 'CREATE' | 'UPDATE' | 'DELETE', object: any, old: any, name?: string): AdmissionCase =>
+            ({ Operation: operation, Group: '', Resource: 'configmaps', Namespace: 'pragmatic-system', Object: name === undefined ? object : AgentPolicy.Changed(object, copy => { copy.metadata.name = name }), OldObject: old })
+        assert.deepEqual(policy.Denials(configMap('UPDATE', own, bare)), [])
+        assert.deepEqual(policy.Denials(configMap('CREATE', AgentPolicy.Changed(own, copy => { copy.metadata.name = 'pragmatic-hive-intents' }), null)), [])
+        assert.ok((policy.Denials(configMap('UPDATE', bare, bare)) ?? []).length > 0, 'an object without labels')
+        assert.ok((policy.Denials(configMap('DELETE', null, own)) ?? []).length > 0, 'DELETE of its own')
+        assert.ok((policy.Denials(configMap('CREATE', own, null, 'pragmatic-config-pragmatic-tenant-admin')) ?? []).length > 0, 'another ConfigMap')
+        const secret = { ...own, kind: 'Secret', metadata: { ...own.metadata, name: 'pragmatic-owner-initial' } }
+        assert.ok((policy.Denials({ Operation: 'UPDATE', Group: '', Resource: 'secrets', Namespace: 'pragmatic-system', Object: secret, OldObject: secret }) ?? []).length > 0, 'another Secret')
+
+        // Anyone else is not this policy's.
+        assert.equal(policy.Denials({ ...update(agent, moved(agent, 'docker.io/x/y:1')), Username: 'system:serviceaccount:pragmatic-system:pragmatic-tenant-admin-acme' }), null)
+
+        // The engine's own objects carry a managed-by the policy admits.
         for (const workload of docs.filter(d => ['Deployment', 'StatefulSet'].includes(d.kind)))
         {
-            assert.ok(cel.ManagedBy().includes(workload.metadata.labels?.['app.kubernetes.io/managed-by'] ?? ''), workload.kind + '/' + workload.metadata.name)
-            for (const container of [...workload.spec.template.spec.containers, ...(workload.spec.template.spec.initContainers ?? [])])
-            {
-                assert.ok(cel.ImageAllowed(container.image), container.image)
-            }
+            assert.ok(['pragmatic-hive-agent', 'pragmatic-tenant-admin', 'pragmatic-engine'].includes(workload.metadata.labels?.['app.kubernetes.io/managed-by'] ?? ''), workload.kind + '/' + workload.metadata.name)
         }
     })
 
@@ -255,6 +334,10 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
         assert.ok((consolePod.containers[0].ports as any[]).some(port => port.name === 'intents' && port.containerPort === 7211))
         const consoleEnv = new Map((consolePod.containers[0].env as any[]).map(e => [e.name, e.value]))
         assert.equal(consoleEnv.get('PRAGMATIC_ENGINE_AGENT_SERVICE_ACCOUNT'), 'system:serviceaccount:pragmatic-system:pragmatic-hive-acme-hive-agent')
+        assert.match(String(consoleEnv.get('PRAGMATIC_ENGINE_VERSION')), /^\d+\.\d+\.\d+/, 'the engine version an environment intent may name')
+        const configuration = ChartFixture.Find(docs, 'Role', 'pragmatic-tenant-admin-acme-configuration')!
+        assert.ok((configuration.rules as any[]).some(rule => rule.resources.includes('secrets') && JSON.stringify(rule.resourceNames) === JSON.stringify(['pragmatic-console-tls', 'pragmatic-tls-dev-ca'])
+            && JSON.stringify(rule.verbs) === JSON.stringify(['get', 'update', 'patch'])), 'the ingress-certificate renewal')
         const consoleRole = ChartFixture.Find(docs, 'ClusterRole', 'pragmatic-tenant-admin-acme')!
         assert.ok((consoleRole.rules as any[]).some(rule => rule.resources.includes('tokenreviews') && JSON.stringify(rule.verbs) === JSON.stringify(['create'])))
         const agentPod = ChartFixture.Find(docs, 'Deployment', 'pragmatic-hive-acme-hive-agent')!.spec.template.spec
@@ -413,12 +496,7 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
         assert.ok(secretRules.length > 0)
         for (const { kind, rule } of secretRules)
         {
-            if (kind === 'ClusterRole')
-            {
-                // The placer: Secrets placed cluster-wide (fenced by the admission policy), never read.
-                assert.deepEqual([...rule.verbs].sort(), ['create', 'delete', 'patch'], 'no cluster-wide Secret read')
-                continue
-            }
+            assert.equal(kind, 'Role', 'no cluster-wide Secret access')
             const reads = (rule.verbs as string[]).filter(verb => verb !== 'create')
             if (reads.length > 0)
             {

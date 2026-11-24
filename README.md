@@ -63,3 +63,9 @@ All ten packages are public, so reads (CI's checks, `assemble`) need no grant.
 
 All installs and tests run on the hive laptop (`dev-kit/tools/hive-run`): `npm ci`, `npm test`, `npm run typecheck`.
 The `.npmrc` reads `NODE_AUTH_TOKEN`.
+
+Ruling (C3.4, the console's internal intent endpoint over plain HTTP): the hive agent reaches the console's port 7211 by
+`http://<console>-internal.<namespace>.svc:7211` without TLS. The bearer is the agent's projected service-account token,
+audience-bound to `pragmatic-tenant-admin` and valid for an hour (useless to any other audience), the console checks it by
+TokenReview against the agent's account, and a NetworkPolicy admits only the agent's pods to 7211; nothing secret travels
+(an intent's action and its outcome code). Cost if wrong: TLS on 7211 with the engine's own CA later.

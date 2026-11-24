@@ -1,9 +1,10 @@
 {{- if and (not (include "engine.standalone" .)) (not .Values.hosted) }}
-# "Place, never look" (levels design §4, C3.4): what an Enrolled or Delegated agent may do to apply pulled intents (an
-# Enrolled hive applies them too, after the customer's approval). It may create, change and delete the objects that place
-# workloads, and read only Deployments, StatefulSets and Namespaces (to see what it rolled). It may create, patch and
-# delete Secrets but never get, list or watch one; nothing on pods (exec, port-forward, logs), services/proxy or
-# nodes/proxy. Where it may do it is fenced by the admission policy (hive-agent-admission-policy.yaml).
+# "Place, never look" (levels design §4, C3.4), as small as what the agent applies itself: it moves the engine's own
+# workloads (component-at-version: their images; repair: a restart), by name, and nothing else. It reads nothing but those
+# four workloads (by name: no list, no watch) and has no access to Secrets, ConfigMaps, pods (exec, port-forward, logs),
+# services/proxy or nodes/proxy; its own Secret, ConfigMaps and Lease are its namespaced Role's (hive-agent-rbac.yaml).
+# Environments are the console's (the agent forwards their intents). The admission policy fences even this
+# (hive-agent-admission-policy.yaml: an image-only change to a managed object).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -12,18 +13,11 @@ metadata:
     {{- include "engine.hiveLabels" . | nindent 4 }}
 rules:
   - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: [""]
-    resources: ["services", "configmaps", "serviceaccounts", "persistentvolumeclaims"]
-    verbs: ["create", "update", "patch", "delete"]
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses", "networkpolicies"]
-    verbs: ["create", "update", "patch", "delete"]
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["create", "patch", "delete"]
+    resources: ["deployments"]
+    resourceNames: [{{ include "engine.consoleName" . | quote }}, {{ include "engine.agentName" . | quote }}, {{ include "engine.idpName" . | quote }}]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    resourceNames: ["pragmatic-postgres"]
+    verbs: ["get", "patch", "update"]
 {{- end }}

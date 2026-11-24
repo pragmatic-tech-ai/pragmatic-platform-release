@@ -276,11 +276,12 @@ spec:
       storage: 1Gi
 ---
 # Source: pragmatic-engine/templates/hive-agent-placer-clusterrole.yaml
-# "Place, never look" (levels design §4, C3.4): what an Enrolled or Delegated agent may do to apply pulled intents (an
-# Enrolled hive applies them too, after the customer's approval). It may create, change and delete the objects that place
-# workloads, and read only Deployments, StatefulSets and Namespaces (to see what it rolled). It may create, patch and
-# delete Secrets but never get, list or watch one; nothing on pods (exec, port-forward, logs), services/proxy or
-# nodes/proxy. Where it may do it is fenced by the admission policy (hive-agent-admission-policy.yaml).
+# "Place, never look" (levels design §4, C3.4), as small as what the agent applies itself: it moves the engine's own
+# workloads (component-at-version: their images; repair: a restart), by name, and nothing else. It reads nothing but those
+# four workloads (by name: no list, no watch) and has no access to Secrets, ConfigMaps, pods (exec, port-forward, logs),
+# services/proxy or nodes/proxy; its own Secret, ConfigMaps and Lease are its namespaced Role's (hive-agent-rbac.yaml).
+# Environments are the console's (the agent forwards their intents). The admission policy fences even this
+# (hive-agent-admission-policy.yaml: an image-only change to a managed object).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -289,20 +290,13 @@ metadata:
     pragmatic/hive: acme-hive
 rules:
   - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: [""]
-    resources: ["services", "configmaps", "serviceaccounts", "persistentvolumeclaims"]
-    verbs: ["create", "update", "patch", "delete"]
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses", "networkpolicies"]
-    verbs: ["create", "update", "patch", "delete"]
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["create", "patch", "delete"]
+    resources: ["deployments"]
+    resourceNames: ["pragmatic-tenant-admin-acme", "pragmatic-hive-acme-hive-agent", "pragmatic-idp-acme"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    resourceNames: ["pragmatic-postgres"]
+    verbs: ["get", "patch", "update"]
 ---
 # Source: pragmatic-engine/templates/hive-agent-rbac.yaml
 # TokenReviews (the console's bearer) and the environments' Deployments (read-only), cluster-scoped.
@@ -442,6 +436,14 @@ rules:
     resources: ["configmaps"]
     resourceNames: ["pragmatic-hive-enrolment", "pragmatic-hive-intents"]
     verbs: ["get", "update"]
+  # The intent lease (C3.4): one agent pod applies intents at a time.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: ["pragmatic-hive-agent-intents"]
+    verbs: ["get", "update"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
     resourceNames: ["pragmatic-tenant-admin-acme"]
@@ -487,6 +489,11 @@ rules:
     resources: ["deployments"]
     resourceNames: ["pragmatic-hive-acme-hive-agent", "pragmatic-tenant-admin-acme"]
     verbs: ["get", "patch"]
+  # The ingress-certificate rotation intent (C3.4): the console renews its TLS Secret (and the dev CA of a self-signed engine).
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["pragmatic-console-tls", "pragmatic-tls-dev-ca"]
+    verbs: ["get", "update", "patch"]
 ---
 # Source: pragmatic-engine/templates/tenant-admin-rbac.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -933,6 +940,8 @@ spec:
             # Pull-only management (C3.4): the only caller of the internal intent endpoint on 7211 (TokenReview, audience
             # pragmatic-tenant-admin).
             - { name: PRAGMATIC_ENGINE_AGENT_SERVICE_ACCOUNT, value: "system:serviceaccount:pragmatic-system:pragmatic-hive-acme-hive-agent" }
+            # The engine's release version: the only version an environment intent may name.
+            - { name: PRAGMATIC_ENGINE_VERSION, value: "0.0.0" }
           readinessProbe:
             httpGet:
               path: /healthz
@@ -1365,11 +1374,17 @@ spec:
                   number: 9443
 ---
 # Source: pragmatic-engine/templates/hive-agent-admission-policy.yaml
-# The hive agent's admission fence (C3.4, "place, never look", enforced in the cluster): every change the agent's
-# service account makes must be in the engine's namespaces (this one, the sign-in service's) or an environment's
-# (pragmatic-env-*), to an object the agent, the console or the chart manages (app.kubernetes.io/managed-by), and every
-# container image of a Deployment or StatefulSet must be a release image by digest (ghcr.io or registry.pragmatic-tech.ai,
-# organisation pragmatic-tech-ai). Kubernetes ValidatingAdmissionPolicy (GA in 1.30): nothing to run or certify.
+# The hive agent's admission fence (C3.4, "place, never look", enforced in the cluster, not promised), on the agent's
+# service account only. It may change exactly two kinds of object:
+#   - its own Secret, ConfigMaps and Lease in this namespace (by name, labelled managed-by pragmatic-hive-agent);
+#   - the engine's four workloads (by name, in this namespace and the sign-in service's), UPDATE only, both before and after
+#     managed by the agent, the console or the chart, with every container and init container a release image by digest
+#     (ghcr.io or registry.pragmatic-tech.ai, organisation pragmatic-tech-ai), and nothing but the images changed: the pod
+#     spec's other fields and each container's other fields (command, args, env, envFrom, volumes and mounts, the service
+#     account, security contexts, probes) equal the object's before, no hostPath, privileged, host namespaces or added
+#     capabilities. So it can never "look by placing": no new workload, no shell, no other Secret mounted, no other account.
+# Every other change (namespaces included: the agent never touches one; environments are the console's) is denied.
+# Kubernetes ValidatingAdmissionPolicy (GA in 1.30): nothing to run or certify.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -1383,27 +1398,61 @@ spec:
       expression: "request.userInfo.username == 'system:serviceaccount:pragmatic-system:pragmatic-hive-acme-hive-agent'"
   matchConstraints:
     resourceRules:
-      - { apiGroups: [""], apiVersions: ["v1"], operations: ["CREATE", "UPDATE", "DELETE"], resources: ["namespaces", "services", "configmaps", "serviceaccounts", "persistentvolumeclaims", "secrets"], scope: "*" }
-      - { apiGroups: ["apps"], apiVersions: ["v1"], operations: ["CREATE", "UPDATE", "DELETE"], resources: ["deployments", "statefulsets"], scope: "*" }
+      - { apiGroups: [""], apiVersions: ["v1"], operations: ["CREATE", "UPDATE", "DELETE"], resources: ["namespaces", "secrets", "configmaps", "services", "serviceaccounts", "persistentvolumeclaims", "pods"], scope: "*" }
+      - { apiGroups: ["apps"], apiVersions: ["v1"], operations: ["CREATE", "UPDATE", "DELETE"], resources: ["deployments", "statefulsets", "daemonsets", "replicasets"], scope: "*" }
+      - { apiGroups: ["batch"], apiVersions: ["v1"], operations: ["CREATE", "UPDATE", "DELETE"], resources: ["jobs", "cronjobs"], scope: "*" }
       - { apiGroups: ["networking.k8s.io"], apiVersions: ["v1"], operations: ["CREATE", "UPDATE", "DELETE"], resources: ["ingresses", "networkpolicies"], scope: "*" }
+      - { apiGroups: ["coordination.k8s.io"], apiVersions: ["v1"], operations: ["CREATE", "UPDATE", "DELETE"], resources: ["leases"], scope: "*" }
+      - { apiGroups: ["rbac.authorization.k8s.io"], apiVersions: ["v1"], operations: ["CREATE", "UPDATE", "DELETE"], resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"], scope: "*" }
   variables:
     - name: target
       expression: "request.operation == 'DELETE' ? oldObject : object"
-    - name: namespace
-      expression: "request.resource.resource == 'namespaces' ? variables.target.metadata.name : request.namespace"
+    - name: own
+      expression: >-
+        request.namespace == 'pragmatic-system' && request.resource.resource in ['secrets', 'configmaps', 'leases']
+        && variables.target.metadata.name in ['pragmatic-hive-identity', 'pragmatic-hive-enrolment', 'pragmatic-hive-intents', 'pragmatic-hive-agent-intents']
+    - name: workload
+      expression: >-
+        request.resource.group == 'apps' && ((request.resource.resource == 'deployments' && ((request.namespace == 'pragmatic-system' && variables.target.metadata.name in ['pragmatic-tenant-admin-acme', 'pragmatic-hive-acme-hive-agent'])
+        || (request.namespace == 'pragmatic-idp-acme' && variables.target.metadata.name == 'pragmatic-idp-acme')))
+        || (request.resource.resource == 'statefulsets' && request.namespace == 'pragmatic-system' && variables.target.metadata.name == 'pragmatic-postgres'))
   validations:
+    - expression: "variables.own || variables.workload"
+      message: "The hive agent may only change its own Secret, ConfigMaps and Lease, and the engine's own workloads."
     - expression: >-
-        variables.namespace in ['pragmatic-system', 'pragmatic-idp-acme'] || variables.namespace.startsWith('pragmatic-env-')
-      message: "The hive agent may only change objects in the engine's namespaces and its environments' (pragmatic-env-*)."
+        !variables.own || (request.operation != 'DELETE' && has(object.metadata.labels) && 'app.kubernetes.io/managed-by' in object.metadata.labels
+        && object.metadata.labels['app.kubernetes.io/managed-by'] == 'pragmatic-hive-agent')
+      message: "The hive agent's own objects carry managed-by pragmatic-hive-agent and are never deleted by it."
+    - expression: "!variables.workload || request.operation == 'UPDATE'"
+      message: "The hive agent never creates or deletes a workload: it only moves the engine's own."
     - expression: >-
-        has(variables.target.metadata.labels) && 'app.kubernetes.io/managed-by' in variables.target.metadata.labels
-        && variables.target.metadata.labels['app.kubernetes.io/managed-by'] in ['pragmatic-hive-agent', 'pragmatic-tenant-admin', 'pragmatic-engine']
-      message: "The hive agent may only change objects the agent, the console or the engine chart manages."
+        !variables.workload || request.operation != 'UPDATE' || ((has(oldObject.metadata.labels) && 'app.kubernetes.io/managed-by' in oldObject.metadata.labels && oldObject.metadata.labels['app.kubernetes.io/managed-by'] in ['pragmatic-hive-agent', 'pragmatic-tenant-admin', 'pragmatic-engine']) && (has(object.metadata.labels) && 'app.kubernetes.io/managed-by' in object.metadata.labels && object.metadata.labels['app.kubernetes.io/managed-by'] in ['pragmatic-hive-agent', 'pragmatic-tenant-admin', 'pragmatic-engine']))
+      message: "The hive agent may only change workloads the agent, the console or the engine chart managed before and after."
     - expression: >-
-        request.operation == 'DELETE' || !(request.resource.resource in ['deployments', 'statefulsets'])
-        || (object.spec.template.spec.containers.all(c, c.image.matches(r'^(ghcr\.io|registry\.pragmatic-tech\.ai)/pragmatic-tech-ai/[^@]+@sha256:[a-f0-9]{64}$'))
+        !variables.workload || request.operation != 'UPDATE' || (object.spec.template.spec.containers.all(c, c.image.matches(r'^(ghcr\.io|registry\.pragmatic-tech\.ai)/pragmatic-tech-ai/[^@]+@sha256:[a-f0-9]{64}$'))
         && (!has(object.spec.template.spec.initContainers) || object.spec.template.spec.initContainers.all(c, c.image.matches(r'^(ghcr\.io|registry\.pragmatic-tech\.ai)/pragmatic-tech-ai/[^@]+@sha256:[a-f0-9]{64}$'))))
       message: "The hive agent may only run release images by digest (ghcr.io or registry.pragmatic-tech.ai, pragmatic-tech-ai)."
+    - expression: >-
+        !variables.workload || request.operation != 'UPDATE' || ((has(object.spec.template.spec.volumes) == has(oldObject.spec.template.spec.volumes) && (!has(object.spec.template.spec.volumes) || object.spec.template.spec.volumes == oldObject.spec.template.spec.volumes)) && (has(object.spec.template.spec.serviceAccountName) == has(oldObject.spec.template.spec.serviceAccountName) && (!has(object.spec.template.spec.serviceAccountName) || object.spec.template.spec.serviceAccountName == oldObject.spec.template.spec.serviceAccountName)) && (has(object.spec.template.spec.serviceAccount) == has(oldObject.spec.template.spec.serviceAccount) && (!has(object.spec.template.spec.serviceAccount) || object.spec.template.spec.serviceAccount == oldObject.spec.template.spec.serviceAccount)) && (has(object.spec.template.spec.automountServiceAccountToken) == has(oldObject.spec.template.spec.automountServiceAccountToken) && (!has(object.spec.template.spec.automountServiceAccountToken) || object.spec.template.spec.automountServiceAccountToken == oldObject.spec.template.spec.automountServiceAccountToken)) && (has(object.spec.template.spec.hostNetwork) == has(oldObject.spec.template.spec.hostNetwork) && (!has(object.spec.template.spec.hostNetwork) || object.spec.template.spec.hostNetwork == oldObject.spec.template.spec.hostNetwork)) && (has(object.spec.template.spec.hostPID) == has(oldObject.spec.template.spec.hostPID) && (!has(object.spec.template.spec.hostPID) || object.spec.template.spec.hostPID == oldObject.spec.template.spec.hostPID)) && (has(object.spec.template.spec.hostIPC) == has(oldObject.spec.template.spec.hostIPC) && (!has(object.spec.template.spec.hostIPC) || object.spec.template.spec.hostIPC == oldObject.spec.template.spec.hostIPC)) && (has(object.spec.template.spec.hostUsers) == has(oldObject.spec.template.spec.hostUsers) && (!has(object.spec.template.spec.hostUsers) || object.spec.template.spec.hostUsers == oldObject.spec.template.spec.hostUsers)) && (has(object.spec.template.spec.securityContext) == has(oldObject.spec.template.spec.securityContext) && (!has(object.spec.template.spec.securityContext) || object.spec.template.spec.securityContext == oldObject.spec.template.spec.securityContext)) && (has(object.spec.template.spec.nodeName) == has(oldObject.spec.template.spec.nodeName) && (!has(object.spec.template.spec.nodeName) || object.spec.template.spec.nodeName == oldObject.spec.template.spec.nodeName)) && (has(object.spec.template.spec.nodeSelector) == has(oldObject.spec.template.spec.nodeSelector) && (!has(object.spec.template.spec.nodeSelector) || object.spec.template.spec.nodeSelector == oldObject.spec.template.spec.nodeSelector)) && (has(object.spec.template.spec.hostAliases) == has(oldObject.spec.template.spec.hostAliases) && (!has(object.spec.template.spec.hostAliases) || object.spec.template.spec.hostAliases == oldObject.spec.template.spec.hostAliases)) && (has(object.spec.template.spec.shareProcessNamespace) == has(oldObject.spec.template.spec.shareProcessNamespace) && (!has(object.spec.template.spec.shareProcessNamespace) || object.spec.template.spec.shareProcessNamespace == oldObject.spec.template.spec.shareProcessNamespace)) && (has(object.spec.template.spec.runtimeClassName) == has(oldObject.spec.template.spec.runtimeClassName) && (!has(object.spec.template.spec.runtimeClassName) || object.spec.template.spec.runtimeClassName == oldObject.spec.template.spec.runtimeClassName)) && (has(object.spec.template.spec.dnsPolicy) == has(oldObject.spec.template.spec.dnsPolicy) && (!has(object.spec.template.spec.dnsPolicy) || object.spec.template.spec.dnsPolicy == oldObject.spec.template.spec.dnsPolicy)) && (has(object.spec.template.spec.dnsConfig) == has(oldObject.spec.template.spec.dnsConfig) && (!has(object.spec.template.spec.dnsConfig) || object.spec.template.spec.dnsConfig == oldObject.spec.template.spec.dnsConfig)) && (has(object.spec.template.spec.affinity) == has(oldObject.spec.template.spec.affinity) && (!has(object.spec.template.spec.affinity) || object.spec.template.spec.affinity == oldObject.spec.template.spec.affinity)) && (has(object.spec.template.spec.tolerations) == has(oldObject.spec.template.spec.tolerations) && (!has(object.spec.template.spec.tolerations) || object.spec.template.spec.tolerations == oldObject.spec.template.spec.tolerations)) && (has(object.spec.template.spec.priorityClassName) == has(oldObject.spec.template.spec.priorityClassName) && (!has(object.spec.template.spec.priorityClassName) || object.spec.template.spec.priorityClassName == oldObject.spec.template.spec.priorityClassName)) && (has(object.spec.template.spec.enableServiceLinks) == has(oldObject.spec.template.spec.enableServiceLinks) && (!has(object.spec.template.spec.enableServiceLinks) || object.spec.template.spec.enableServiceLinks == oldObject.spec.template.spec.enableServiceLinks)) && (has(object.spec.template.spec.imagePullSecrets) == has(oldObject.spec.template.spec.imagePullSecrets) && (!has(object.spec.template.spec.imagePullSecrets) || object.spec.template.spec.imagePullSecrets == oldObject.spec.template.spec.imagePullSecrets)) && (has(object.spec.template.spec.overhead) == has(oldObject.spec.template.spec.overhead) && (!has(object.spec.template.spec.overhead) || object.spec.template.spec.overhead == oldObject.spec.template.spec.overhead)) && (has(object.spec.template.spec.os) == has(oldObject.spec.template.spec.os) && (!has(object.spec.template.spec.os) || object.spec.template.spec.os == oldObject.spec.template.spec.os)) && (has(object.spec.template.spec.schedulingGates) == has(oldObject.spec.template.spec.schedulingGates) && (!has(object.spec.template.spec.schedulingGates) || object.spec.template.spec.schedulingGates == oldObject.spec.template.spec.schedulingGates)) && (has(object.spec.template.spec.resourceClaims) == has(oldObject.spec.template.spec.resourceClaims) && (!has(object.spec.template.spec.resourceClaims) || object.spec.template.spec.resourceClaims == oldObject.spec.template.spec.resourceClaims)) && (has(object.spec.template.spec.readinessGates) == has(oldObject.spec.template.spec.readinessGates) && (!has(object.spec.template.spec.readinessGates) || object.spec.template.spec.readinessGates == oldObject.spec.template.spec.readinessGates)) && (has(object.spec.template.spec.subdomain) == has(oldObject.spec.template.spec.subdomain) && (!has(object.spec.template.spec.subdomain) || object.spec.template.spec.subdomain == oldObject.spec.template.spec.subdomain)) && (has(object.spec.template.spec.hostname) == has(oldObject.spec.template.spec.hostname) && (!has(object.spec.template.spec.hostname) || object.spec.template.spec.hostname == oldObject.spec.template.spec.hostname)) && (has(object.spec.template.spec.setHostnameAsFQDN) == has(oldObject.spec.template.spec.setHostnameAsFQDN) && (!has(object.spec.template.spec.setHostnameAsFQDN) || object.spec.template.spec.setHostnameAsFQDN == oldObject.spec.template.spec.setHostnameAsFQDN)) && (has(object.spec.template.spec.preemptionPolicy) == has(oldObject.spec.template.spec.preemptionPolicy) && (!has(object.spec.template.spec.preemptionPolicy) || object.spec.template.spec.preemptionPolicy == oldObject.spec.template.spec.preemptionPolicy)) && (has(object.spec.template.spec.topologySpreadConstraints) == has(oldObject.spec.template.spec.topologySpreadConstraints) && (!has(object.spec.template.spec.topologySpreadConstraints) || object.spec.template.spec.topologySpreadConstraints == oldObject.spec.template.spec.topologySpreadConstraints)) && (has(object.spec.template.spec.terminationGracePeriodSeconds) == has(oldObject.spec.template.spec.terminationGracePeriodSeconds) && (!has(object.spec.template.spec.terminationGracePeriodSeconds) || object.spec.template.spec.terminationGracePeriodSeconds == oldObject.spec.template.spec.terminationGracePeriodSeconds)) && (has(object.spec.template.spec.activeDeadlineSeconds) == has(oldObject.spec.template.spec.activeDeadlineSeconds) && (!has(object.spec.template.spec.activeDeadlineSeconds) || object.spec.template.spec.activeDeadlineSeconds == oldObject.spec.template.spec.activeDeadlineSeconds)) && (has(object.spec.template.spec.restartPolicy) == has(oldObject.spec.template.spec.restartPolicy) && (!has(object.spec.template.spec.restartPolicy) || object.spec.template.spec.restartPolicy == oldObject.spec.template.spec.restartPolicy)) && (has(object.spec.template.spec.schedulerName) == has(oldObject.spec.template.spec.schedulerName) && (!has(object.spec.template.spec.schedulerName) || object.spec.template.spec.schedulerName == oldObject.spec.template.spec.schedulerName)))
+      message: "The hive agent may only change a workload's images: its pod's volumes, service account and security stay as they were."
+    - expression: >-
+        !variables.workload || request.operation != 'UPDATE' || (has(object.spec.template.spec.containers) == has(oldObject.spec.template.spec.containers)
+        && (!has(object.spec.template.spec.containers) || (size(object.spec.template.spec.containers) == size(oldObject.spec.template.spec.containers)
+        && object.spec.template.spec.containers.all(c, oldObject.spec.template.spec.containers.exists(o, o.name == c.name && (has(c.command) == has(o.command) && (!has(c.command) || c.command == o.command)) && (has(c.args) == has(o.args) && (!has(c.args) || c.args == o.args)) && (has(c.workingDir) == has(o.workingDir) && (!has(c.workingDir) || c.workingDir == o.workingDir)) && (has(c.ports) == has(o.ports) && (!has(c.ports) || c.ports == o.ports)) && (has(c.envFrom) == has(o.envFrom) && (!has(c.envFrom) || c.envFrom == o.envFrom)) && (has(c.env) == has(o.env) && (!has(c.env) || c.env == o.env)) && (has(c.resources) == has(o.resources) && (!has(c.resources) || c.resources == o.resources)) && (has(c.resizePolicy) == has(o.resizePolicy) && (!has(c.resizePolicy) || c.resizePolicy == o.resizePolicy)) && (has(c.volumeMounts) == has(o.volumeMounts) && (!has(c.volumeMounts) || c.volumeMounts == o.volumeMounts)) && (has(c.volumeDevices) == has(o.volumeDevices) && (!has(c.volumeDevices) || c.volumeDevices == o.volumeDevices)) && (has(c.livenessProbe) == has(o.livenessProbe) && (!has(c.livenessProbe) || c.livenessProbe == o.livenessProbe)) && (has(c.readinessProbe) == has(o.readinessProbe) && (!has(c.readinessProbe) || c.readinessProbe == o.readinessProbe)) && (has(c.startupProbe) == has(o.startupProbe) && (!has(c.startupProbe) || c.startupProbe == o.startupProbe)) && (has(c.lifecycle) == has(o.lifecycle) && (!has(c.lifecycle) || c.lifecycle == o.lifecycle)) && (has(c.securityContext) == has(o.securityContext) && (!has(c.securityContext) || c.securityContext == o.securityContext)) && (has(c.stdin) == has(o.stdin) && (!has(c.stdin) || c.stdin == o.stdin)) && (has(c.stdinOnce) == has(o.stdinOnce) && (!has(c.stdinOnce) || c.stdinOnce == o.stdinOnce)) && (has(c.tty) == has(o.tty) && (!has(c.tty) || c.tty == o.tty)) && (has(c.imagePullPolicy) == has(o.imagePullPolicy) && (!has(c.imagePullPolicy) || c.imagePullPolicy == o.imagePullPolicy)) && (has(c.terminationMessagePath) == has(o.terminationMessagePath) && (!has(c.terminationMessagePath) || c.terminationMessagePath == o.terminationMessagePath)) && (has(c.terminationMessagePolicy) == has(o.terminationMessagePolicy) && (!has(c.terminationMessagePolicy) || c.terminationMessagePolicy == o.terminationMessagePolicy)) && (has(c.restartPolicy) == has(o.restartPolicy) && (!has(c.restartPolicy) || c.restartPolicy == o.restartPolicy)))))))
+      message: "The hive agent may only change a container's image: its command, arguments, environment, mounts and security stay as they were."
+    - expression: >-
+        !variables.workload || request.operation != 'UPDATE' || (has(object.spec.template.spec.initContainers) == has(oldObject.spec.template.spec.initContainers)
+        && (!has(object.spec.template.spec.initContainers) || (size(object.spec.template.spec.initContainers) == size(oldObject.spec.template.spec.initContainers)
+        && object.spec.template.spec.initContainers.all(c, oldObject.spec.template.spec.initContainers.exists(o, o.name == c.name && (has(c.command) == has(o.command) && (!has(c.command) || c.command == o.command)) && (has(c.args) == has(o.args) && (!has(c.args) || c.args == o.args)) && (has(c.workingDir) == has(o.workingDir) && (!has(c.workingDir) || c.workingDir == o.workingDir)) && (has(c.ports) == has(o.ports) && (!has(c.ports) || c.ports == o.ports)) && (has(c.envFrom) == has(o.envFrom) && (!has(c.envFrom) || c.envFrom == o.envFrom)) && (has(c.env) == has(o.env) && (!has(c.env) || c.env == o.env)) && (has(c.resources) == has(o.resources) && (!has(c.resources) || c.resources == o.resources)) && (has(c.resizePolicy) == has(o.resizePolicy) && (!has(c.resizePolicy) || c.resizePolicy == o.resizePolicy)) && (has(c.volumeMounts) == has(o.volumeMounts) && (!has(c.volumeMounts) || c.volumeMounts == o.volumeMounts)) && (has(c.volumeDevices) == has(o.volumeDevices) && (!has(c.volumeDevices) || c.volumeDevices == o.volumeDevices)) && (has(c.livenessProbe) == has(o.livenessProbe) && (!has(c.livenessProbe) || c.livenessProbe == o.livenessProbe)) && (has(c.readinessProbe) == has(o.readinessProbe) && (!has(c.readinessProbe) || c.readinessProbe == o.readinessProbe)) && (has(c.startupProbe) == has(o.startupProbe) && (!has(c.startupProbe) || c.startupProbe == o.startupProbe)) && (has(c.lifecycle) == has(o.lifecycle) && (!has(c.lifecycle) || c.lifecycle == o.lifecycle)) && (has(c.securityContext) == has(o.securityContext) && (!has(c.securityContext) || c.securityContext == o.securityContext)) && (has(c.stdin) == has(o.stdin) && (!has(c.stdin) || c.stdin == o.stdin)) && (has(c.stdinOnce) == has(o.stdinOnce) && (!has(c.stdinOnce) || c.stdinOnce == o.stdinOnce)) && (has(c.tty) == has(o.tty) && (!has(c.tty) || c.tty == o.tty)) && (has(c.imagePullPolicy) == has(o.imagePullPolicy) && (!has(c.imagePullPolicy) || c.imagePullPolicy == o.imagePullPolicy)) && (has(c.terminationMessagePath) == has(o.terminationMessagePath) && (!has(c.terminationMessagePath) || c.terminationMessagePath == o.terminationMessagePath)) && (has(c.terminationMessagePolicy) == has(o.terminationMessagePolicy) && (!has(c.terminationMessagePolicy) || c.terminationMessagePolicy == o.terminationMessagePolicy)) && (has(c.restartPolicy) == has(o.restartPolicy) && (!has(c.restartPolicy) || c.restartPolicy == o.restartPolicy)))))))
+      message: "The hive agent may only change a container's image: its command, arguments, environment, mounts and security stay as they were."
+    - expression: >-
+        !variables.workload || request.operation != 'UPDATE' || ((!has(object.spec.template.spec.volumes) || object.spec.template.spec.volumes.all(v, !has(v.hostPath)))
+        && (!has(object.spec.template.spec.hostNetwork) || !object.spec.template.spec.hostNetwork)
+        && (!has(object.spec.template.spec.hostPID) || !object.spec.template.spec.hostPID)
+        && (!has(object.spec.template.spec.hostIPC) || !object.spec.template.spec.hostIPC)
+        && object.spec.template.spec.containers.all(c, (!has(c.securityContext) || ((!has(c.securityContext.privileged) || !c.securityContext.privileged) && (!has(c.securityContext.capabilities) || !has(c.securityContext.capabilities.add) || size(c.securityContext.capabilities.add) == 0))))
+        && (!has(object.spec.template.spec.initContainers) || object.spec.template.spec.initContainers.all(c, (!has(c.securityContext) || ((!has(c.securityContext.privileged) || !c.securityContext.privileged) && (!has(c.securityContext.capabilities) || !has(c.securityContext.capabilities.add) || size(c.securityContext.capabilities.add) == 0))))))
+      message: "The hive agent may never run a workload with hostPath, host namespaces, privileged containers or added capabilities."
 ---
 # Source: pragmatic-engine/templates/tenant-admin-rbac.yaml
 # The console's admission fence (TenantConsoleAdmission): only its own hive's environment namespaces, enforcing a Pod

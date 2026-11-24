@@ -183,3 +183,23 @@ storageClassName: {{ .Values.storage.className }}
 - { name: PRAGMATIC_BOOTSTRAP_TLS_SECRET, value: {{ if include "engine.selfSigned" . }}""{{ else }}{{ include "engine.consoleTlsSecret" . | quote }}{{ end }} }
 - { name: PRAGMATIC_BOOTSTRAP_OWNER_EMAIL, value: {{ include "engine.ownerEmail" . | quote }} }
 {{- end -}}
+
+{{/* CEL (the hive agent's admission policy, C3.4): field `f` of `a` and of `b` both absent, or both present and equal. */}}
+{{- define "engine.celSame" -}}
+(has({{ .a }}.{{ .f }}) == has({{ .b }}.{{ .f }}) && (!has({{ .a }}.{{ .f }}) || {{ .a }}.{{ .f }} == {{ .b }}.{{ .f }}))
+{{- end -}}
+
+{{/* CEL: the object (`object` or `oldObject`) is managed by the agent, the console or the engine chart. */}}
+{{- define "engine.celManaged" -}}
+(has({{ . }}.metadata.labels) && 'app.kubernetes.io/managed-by' in {{ . }}.metadata.labels && {{ . }}.metadata.labels['app.kubernetes.io/managed-by'] in ['pragmatic-hive-agent', 'pragmatic-tenant-admin', 'pragmatic-engine'])
+{{- end -}}
+
+{{/* CEL: a release image by digest (a raw string: RE2). */}}
+{{- define "engine.celReleaseImage" -}}
+r'^(ghcr\.io|registry\.pragmatic-tech\.ai)/pragmatic-tech-ai/[^@]+@sha256:[a-f0-9]{64}$'
+{{- end -}}
+
+{{/* CEL: container `.` is not privileged and adds no capability. */}}
+{{- define "engine.celUnprivileged" -}}
+(!has({{ . }}.securityContext) || ((!has({{ . }}.securityContext.privileged) || !{{ . }}.securityContext.privileged) && (!has({{ . }}.securityContext.capabilities) || !has({{ . }}.securityContext.capabilities.add) || size({{ . }}.securityContext.capabilities.add) == 0)))
+{{- end -}}
