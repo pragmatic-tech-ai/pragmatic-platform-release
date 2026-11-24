@@ -41,7 +41,7 @@ export class ChartFixture
         const dir = mkdtempSync(join(tmpdir(), 'pragmatic-engine-chart-'))
         const chart = join(dir, ChartBuild.ChartName)
         cpSync(ChartBuild.DefaultChartDir, chart, { recursive: true })
-        ChartBuild.FillDigests(join(chart, ChartBuild.ValuesFile), ChartFixture.Manifest())
+        ChartBuild.WriteImages(join(chart, ChartBuild.ImagesFile), ChartFixture.Manifest())
         const descriptors = join(chart, ChartBuild.DescriptorsDir)
         mkdirSync(descriptors, { recursive: true })
         for (const app of ReleaseApps.All)

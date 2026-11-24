@@ -2,25 +2,22 @@
 {{- $ns := include "engine.namespace" . }}
 # Preflight (pre-install, pre-upgrade; before anything else): the hive agent image checks the cluster version, the storage
 # and ingress classes, the published names and the certificate. A failing check fails this Job and Helm stops before any
-# workload is created; read why with: kubectl logs -n {{ $ns }} job/pragmatic-engine-preflight
+# workload is created; read why with: kubectl logs -n {{ $ns }} job/pragmatic-engine-preflight, then
+# helm uninstall pragmatic-engine -n {{ $ns }} before installing again.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: pragmatic-engine-preflight
   namespace: {{ $ns }}
   annotations:
-    helm.sh/hook: pre-install,pre-upgrade
-    helm.sh/hook-weight: "-30"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    {{- include "engine.hookObject" (dict "weight" -30) | nindent 4 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: pragmatic-engine-preflight
   annotations:
-    helm.sh/hook: pre-install,pre-upgrade
-    helm.sh/hook-weight: "-30"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    {{- include "engine.hookObject" (dict "weight" -30) | nindent 4 }}
 rules:
   - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses"]
@@ -36,9 +33,7 @@ kind: ClusterRoleBinding
 metadata:
   name: pragmatic-engine-preflight
   annotations:
-    helm.sh/hook: pre-install,pre-upgrade
-    helm.sh/hook-weight: "-30"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    {{- include "engine.hookObject" (dict "weight" -30) | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -56,9 +51,7 @@ metadata:
   name: pragmatic-engine-preflight
   namespace: {{ $ns }}
   annotations:
-    helm.sh/hook: pre-install,pre-upgrade
-    helm.sh/hook-weight: "-30"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    {{- include "engine.hookObject" (dict "weight" -30) | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
@@ -71,9 +64,7 @@ metadata:
   name: pragmatic-engine-preflight
   namespace: {{ $ns }}
   annotations:
-    helm.sh/hook: pre-install,pre-upgrade
-    helm.sh/hook-weight: "-30"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    {{- include "engine.hookObject" (dict "weight" -30) | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -90,10 +81,8 @@ metadata:
   name: pragmatic-engine-preflight
   namespace: {{ $ns }}
   annotations:
-    helm.sh/hook: pre-install,pre-upgrade
-    helm.sh/hook-weight: "-20"
     # A failed preflight Job stays (its log says why); the next install replaces it.
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    {{- include "engine.hookJob" (dict "weight" -20) | nindent 4 }}
 spec:
   backoffLimit: 0
   activeDeadlineSeconds: 300
@@ -124,6 +113,8 @@ spec:
               value: {{ .Values.console.host | quote }}
             - name: PRAGMATIC_PREFLIGHT_IDP_HOST
               value: {{ include "engine.idpHost" . | quote }}
+            - name: PRAGMATIC_PREFLIGHT_BASE_DOMAIN
+              value: {{ include "engine.baseDomain" . | quote }}
             - name: PRAGMATIC_PREFLIGHT_CONSOLE_ADDRESS
               value: {{ .Values.console.address | quote }}
             - name: PRAGMATIC_PREFLIGHT_TLS_MODE

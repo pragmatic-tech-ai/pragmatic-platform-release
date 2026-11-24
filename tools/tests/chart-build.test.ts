@@ -4,7 +4,6 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { parse } from 'yaml'
 import { ReleaseApp, ReleaseApps, ReleaseManifest, type IComponentAssetSource, type ReleaseManifestDocument } from '@pragmatic-tech-ai/pragmatic-release-toolkit'
 import { ChartBuild, ChartBuildCli, ChartBuildError, type IHelm } from '../chart-build.js'
 
@@ -85,16 +84,15 @@ describe('ChartBuild', () =>
             const result = await new ChartBuild(new FixtureAssets(), helm).Run(manifest, out, 'ghcr.io/pragmatic-tech-ai/charts')
             assert.deepEqual(result, { Version: '0.1.0-early.16', Digest: RecordingHelm.PushedDigest, Package: join(out, 'pragmatic-engine-0.1.0-early.16.tgz') })
             const staged = join(out, 'pragmatic-engine')
-            const values = parse(readFileSync(join(staged, 'values.yaml'), 'utf8'))
+            const images = JSON.parse(readFileSync(join(staged, 'files', 'images.json'), 'utf8'))
             for (const app of ReleaseApps.All)
             {
-                assert.equal(values.images.apps[app].digest, manifest.components[app].digest, app)
+                assert.deepEqual(images[app], { repository: manifest.components[app].repository, digest: manifest.components[app].digest }, app)
                 assert.ok(existsSync(join(staged, 'files', 'descriptors', app + '.json')), app)
             }
             const digests = JSON.parse(readFileSync(join(staged, 'files', 'descriptors', 'digests.json'), 'utf8'))
             const asset = readFileSync(join(staged, 'files', 'descriptors', 'pragmatic-tenant-admin.json'))
             assert.equal(digests['pragmatic-tenant-admin'], 'sha256:' + createHash('sha256').update(asset).digest('hex'))
-            assert.match(readFileSync(join(staged, 'values.yaml'), 'utf8'), /# The pragmatic-engine chart's values/, 'comments kept')
             assert.deepEqual(helm.Pushed, [result.Package + ' -> ghcr.io/pragmatic-tech-ai/charts'])
             assert.deepEqual(helm.Packaged, [{ chartDir: staged, version: '0.1.0-early.16' }])
         })
@@ -115,6 +113,21 @@ describe('ChartBuild', () =>
         })
     })
 
+    it('refuses to push the chart of a release already published', async () =>
+    {
+        await BuildFixture.InTemp(async out =>
+        {
+            const helm = new RecordingHelm()
+            const published = { IsPublished: async (version: string) => version === '0.1.0-early.16' }
+            await assert.rejects(new ChartBuild(new FixtureAssets(), helm, ChartBuild.DefaultChartDir, published).Run(BuildFixture.Manifest(), out, 'ghcr.io/pragmatic-tech-ai/charts'), /already published/)
+            assert.deepEqual(helm.Packaged, [])
+            assert.deepEqual(helm.Pushed, [])
+            const notYet = { IsPublished: async () => false }
+            await new ChartBuild(new FixtureAssets(), helm, ChartBuild.DefaultChartDir, notYet).Run(BuildFixture.Manifest(), out, 'ghcr.io/pragmatic-tech-ai/charts')
+            assert.equal(helm.Pushed.length, 1, 'a stopped run before the descriptor is re-run as is')
+        })
+    })
+
     it('the CLI prints the version, the package and the pushed digest, and refuses bad arguments', async () =>
     {
         await BuildFixture.InTemp(async out =>
@@ -126,7 +139,7 @@ describe('ChartBuild', () =>
             const manifestFile = join(out, 'release.json')
             const { writeFileSync } = await import('node:fs')
             writeFileSync(manifestFile, JSON.stringify(BuildFixture.Manifest()))
-            assert.equal(await ChartBuildCli.Run(['--manifest', manifestFile, '--out', out, '--push'], {}, output, new FixtureAssets(), new RecordingHelm()), 0)
+            assert.equal(await ChartBuildCli.Run(['--manifest', manifestFile, '--out', out, '--push'], {}, output, new FixtureAssets(), new RecordingHelm(), { IsPublished: async () => false }), 0)
             assert.deepEqual(lines.filter(l => !l.startsWith('package=')), ['version=0.1.0-early.16', 'digest=' + RecordingHelm.PushedDigest])
         })
     })

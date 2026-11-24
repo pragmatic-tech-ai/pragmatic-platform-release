@@ -56,7 +56,7 @@ spec:
       securityContext:
         {{- include "engine.podSecurity" (dict "uid" 10001) | nindent 8 }}
       initContainers:
-        # The directory seed, master key, trust root and the release's image allow-list into the data folder.
+        # The directory seed, the master key and the release's image allow-list into the data folder.
         - name: seed
           image: {{ include "engine.image" (dict "root" . "app" "pragmatic-tenant-admin") }}
           command: ["sh", "-c", "cp -f --no-preserve=mode /seed/* /data/"]
@@ -96,6 +96,8 @@ spec:
             - { name: PRAGMATIC_IDP_ADMIN_TOKEN_FILE, value: /idp/token/admin-token }
             - { name: PRAGMATIC_TENANT_ADMIN_INGRESS_TLS_SOURCE, value: existing-secret }
             - { name: PRAGMATIC_TENANT_ADMIN_INGRESS_TLS_SECRET, value: {{ $tls | quote }} }
+            - { name: PRAGMATIC_TENANT_ADMIN_INGRESS_CLASS, value: {{ .Values.ingress.className | quote }} }
+            - { name: PRAGMATIC_TENANT_ADMIN_RELEASE_KEYS_DIR, value: /etc/pragmatic/release-keys }
             - { name: PRAGMATIC_TENANT_ADMIN_FINGERPRINT_KEY_FILE, value: /fingerprint/fingerprint.key }
             - { name: PRAGMATIC_TENANT_ADMIN_DATABASE_URL_FILE, value: /run/secrets/tenant-admin-database/database-url }
             - { name: PRAGMATIC_ENGINE_MODE, value: {{ .Values.level | quote }} }
@@ -122,6 +124,7 @@ spec:
             - { name: hive-postgres, mountPath: /run/secrets/hive-postgres, readOnly: true }
             - { name: owner-initial, mountPath: /run/secrets/pragmatic-owner-initial, readOnly: true }
             - { name: release-descriptors, mountPath: /etc/pragmatic/descriptors, readOnly: true }
+            - { name: release-keys, mountPath: /etc/pragmatic/release-keys, readOnly: true }
             {{- include "engine.configurationMounts" (dict "short" "tenant-admin" "component" "pragmatic-tenant-admin") | nindent 12 }}
       volumes:
         - name: data
@@ -140,9 +143,6 @@ spec:
                   name: pragmatic-tenant-admin-master-key
                   items: [{ key: master.key, path: master.key }]
               - configMap:
-                  name: pragmatic-engine-trust-root
-                  items: [{ key: trust-root.pub, path: trust-root.pub }]
-              - configMap:
                   name: pragmatic-engine-release
                   items: [{ key: verified-images.json, path: verified-images.json }]
         # Only the public CA certificate of the sign-in service, never its key.
@@ -160,6 +160,8 @@ spec:
           secret: { secretName: pragmatic-owner-initial, defaultMode: 288, items: [{ key: email, path: email }, { key: password, path: password }] }
         - name: release-descriptors
           configMap: { name: pragmatic-engine-descriptors }
+        - name: release-keys
+          configMap: { name: pragmatic-engine-release-keys }
         {{- include "engine.configurationVolumes" (dict "short" "tenant-admin" "component" "pragmatic-tenant-admin") | nindent 8 }}
 ---
 apiVersion: v1
@@ -184,6 +186,9 @@ metadata:
   namespace: {{ $ns }}
   labels:
     {{- include "engine.hiveLabels" . | nindent 4 }}
+  annotations:
+    # Long tenant API calls (an environment's creation) outlast nginx's 60-second default.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "180"
 spec:
   {{- include "engine.ingressClass" . | nindent 2 }}
   tls:

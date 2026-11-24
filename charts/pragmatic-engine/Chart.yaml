@@ -8,7 +8,7 @@ type: application
 # Set to the platform release version by tools/chart-build.ts (helm package --version).
 version: 0.0.0
 appVersion: "0.0.0"
-kubeVersion: ">=1.29.0-0"
+kubeVersion: ">=1.30.0-0"
 home: https://pragmatic-tech.ai
 sources:
   - https://github.com/pragmatic-tech-ai/pragmatic-platform-release

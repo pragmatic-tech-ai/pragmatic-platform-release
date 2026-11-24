@@ -1,16 +1,17 @@
 {{- $ns := include "engine.namespace" . }}
-# The public key the console verifies signed releases against.
+# The public key the console verifies signed releases against (its release-keys folder: <key id>.pub.pem).
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: pragmatic-engine-trust-root
+  name: pragmatic-engine-release-keys
   namespace: {{ $ns }}
   labels:
     {{- include "engine.hiveLabels" . | nindent 4 }}
 data:
-  trust-root.pub: {{ .Values.trustRoot.publicKey | quote }}
+  {{ .Values.trustRoot.keyId }}.pub.pem: {{ .Values.trustRoot.publicKey | quote }}
 ---
-# The release's images the console may run in its environments (PinnedImageVerifier's allow-list), by digest.
+# The release's images the console may run in its environments (PinnedImageVerifier's allow-list), by digest: the
+# environment server and the UI unpacker only.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -20,7 +21,7 @@ metadata:
     {{- include "engine.hiveLabels" . | nindent 4 }}
 data:
   {{- $images := list }}
-  {{- range $app := keys .Values.images.apps | sortAlpha }}
+  {{- range $app := list "pragmatic-env-server" "pragmatic-ui-unpack" }}
   {{- $images = append $images (dict "imageRef" (include "engine.image" (dict "root" $ "app" $app))) }}
   {{- end }}
   verified-images.json: {{ toJson $images | quote }}

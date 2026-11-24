@@ -2,8 +2,8 @@
 {{- $ns := include "engine.namespace" . }}
 {{- $name := include "engine.agentName" . }}
 # The hive agent (level connected): idle until the hive is enrolled (C3.3 writes its token), then it polls the platform's
-# agent channel. Hosted hives (set by the host agent) bind it to cluster-admin; otherwise it gets the placer role, which
-# grants no read of Secrets, no pods/exec, pods/portforward or services/proxy.
+# agent channel. Hosted hives (set by the host agent) bind it to cluster-admin; otherwise it gets the placer role, empty in
+# this release (never a read of Secrets, pods/exec, pods/portforward or services/proxy).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -19,10 +19,8 @@ metadata:
   name: pragmatic-hive-agent-placer
   labels:
     {{- include "engine.hiveLabels" . | nindent 4 }}
-rules:
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "patch"]
+# Empty until enrolment: an idle agent needs no access; what it may place is granted with the hive's level (C3.3, C3.4).
+rules: []
 ---
 {{- end }}
 apiVersion: rbac.authorization.k8s.io/v1

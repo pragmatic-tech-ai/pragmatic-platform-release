@@ -3,8 +3,8 @@ import { createHash } from 'node:crypto'
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseDocument } from 'yaml'
 import { GitHubComponentAssetSource, ReleaseApps, ReleaseManifest, type IComponentAssetSource, type ReleaseManifestDocument } from '@pragmatic-tech-ai/pragmatic-release-toolkit'
+import { PublishedRelease } from './release-manifest.js'
 
 /** The helm CLI calls the build makes (the real CLI; a recorder in tests). */
 export interface IHelm
@@ -57,6 +57,12 @@ export class HelmCli implements IHelm
     }
 }
 
+/** Whether a release version is already published (its signed descriptor in the registry). */
+export interface IPublishedReleases
+{
+    IsPublished(version: string): Promise<boolean>
+}
+
 /** A manifest the chart cannot be built from (a missing app or digest): nothing was packaged or pushed. */
 export class ChartBuildError extends Error
 {
@@ -70,8 +76,9 @@ export class ChartBuildError extends Error
 }
 
 /**
- * Builds the release's `pragmatic-engine` chart (C3.2 Task 4): a copy of charts/pragmatic-engine with every image digest
- * of the release manifest filled in (images.apps.<app>.digest), the release's component descriptors baked into
+ * Builds the release's `pragmatic-engine` chart (C3.2 Task 4): a copy of charts/pragmatic-engine with the release
+ * manifest's images baked in (files/images.json: each app's repository and digest; no value can change them), the
+ * release's component descriptors baked into
  * files/descriptors (each component's release asset, and digests.json of their content digests, as the console's
  * descriptor ConfigMap carries them), packaged at the release version and, with `push`, pushed to
  * oci://ghcr.io/<namespace>/charts. Answers the version and the pushed chart's manifest digest, which the signed release
@@ -83,20 +90,15 @@ export class ChartBuild
     public static readonly DefaultChartDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'charts', ChartBuild.ChartName)
     public static readonly DescriptorsDir = join('files', 'descriptors')
     public static readonly DigestsFile = 'digests.json'
-    public static readonly ValuesFile = 'values.yaml'
+    public static readonly ImagesFile = join('files', 'images.json')
     private static readonly JsonSuffix = '.json'
-    private static readonly ImagesKey = 'images'
-    private static readonly AppsKey = 'apps'
-    private static readonly DigestKey = 'digest'
-    private static readonly RepositoryKey = 'repository'
     private static readonly Sha256Prefix = 'sha256:'
     private static readonly Hex = 'hex'
     private static readonly JsonIndent = 2
     private static readonly Eol = '\n'
     private static readonly NoDigestPrefix = 'the release manifest names no digest for '
     private static readonly NoAssetPrefix = 'no component descriptor asset for '
-    private static readonly UnknownAppPrefix = 'the chart has no image entry for '
-    private static readonly RepositoryMismatchPrefix = 'the chart pins another repository for '
+    private static readonly PublishedPrefix = 'the release is already published, so its signed chart digest stands: '
     private static readonly ChartsSuffix = '/charts'
     private static readonly PathSeparator = '/'
     private static readonly DigestPattern = /^sha256:[0-9a-f]{64}$/
@@ -106,19 +108,28 @@ export class ChartBuild
     public constructor(
         private readonly assets: IComponentAssetSource,
         private readonly helm: IHelm = new HelmCli(),
-        private readonly chartDir: string = ChartBuild.DefaultChartDir)
+        private readonly chartDir: string = ChartBuild.DefaultChartDir,
+        private readonly published?: IPublishedReleases)
     {
     }
 
-    /** Stages, fills and packages the chart into `out`; pushes it under `ociBase` (`ghcr.io/<namespace>/charts`) when given. */
+    /**
+     * Stages, fills and packages the chart into `out`; pushes it under `ociBase` (`ghcr.io/<namespace>/charts`) when given.
+     * A push for a version already published is refused before anything is written: the signed descriptor binds the chart
+     * digest pushed then, and a re-run would re-tag the chart with another (helm packages are not byte-reproducible).
+     */
     public async Run(manifest: ReleaseManifestDocument, out: string, ociBase?: string): Promise<{ Version: string; Digest: string | undefined; Package: string }>
     {
         const C = ChartBuild
+        if (ociBase !== undefined && this.published !== undefined && await this.published.IsPublished(manifest.version))
+        {
+            throw new ChartBuildError(C.PublishedPrefix + manifest.version)
+        }
         const staged = join(out, C.ChartName)
         rmSync(staged, { recursive: true, force: true })
         mkdirSync(out, { recursive: true })
         cpSync(this.chartDir, staged, { recursive: true })
-        C.FillDigests(join(staged, C.ValuesFile), manifest)
+        C.WriteImages(join(staged, C.ImagesFile), manifest)
         await this.WriteDescriptors(join(staged, C.DescriptorsDir), manifest)
         const packageFile = this.helm.Package(staged, manifest.version, out)
         const digest = ociBase === undefined ? undefined : this.helm.Push(packageFile, ociBase)
@@ -131,11 +142,11 @@ export class ChartBuild
         return registryHost + ChartBuild.PathSeparator + namespace + ChartBuild.ChartsSuffix
     }
 
-    /** Every app's digest into values.yaml (comments kept); a manifest missing one is refused before anything is written. */
-    public static FillDigests(valuesFile: string, manifest: ReleaseManifestDocument): void
+    /** Every app's repository and digest into files/images.json; a manifest missing one is refused before anything is written. */
+    public static WriteImages(imagesFile: string, manifest: ReleaseManifestDocument): void
     {
         const C = ChartBuild
-        const document = parseDocument(readFileSync(valuesFile, C.Utf8))
+        const images: Record<string, { repository: string; digest: string }> = {}
         for (const app of ReleaseApps.All)
         {
             const component = (manifest.components as Partial<ReleaseManifestDocument['components']>)[app]
@@ -143,19 +154,10 @@ export class ChartBuild
             {
                 throw new ChartBuildError(C.NoDigestPrefix + app)
             }
-            const path = [C.ImagesKey, C.AppsKey, app]
-            const repository = document.getIn([...path, C.RepositoryKey])
-            if (typeof repository !== 'string')
-            {
-                throw new ChartBuildError(C.UnknownAppPrefix + app)
-            }
-            if (repository !== component.repository)
-            {
-                throw new ChartBuildError(C.RepositoryMismatchPrefix + app)
-            }
-            document.setIn([...path, C.DigestKey], component.digest)
+            images[app] = { repository: component.repository, digest: component.digest }
         }
-        writeFileSync(valuesFile, document.toString())
+        mkdirSync(dirname(imagesFile), { recursive: true })
+        writeFileSync(imagesFile, JSON.stringify(images, undefined, C.JsonIndent) + C.Eol)
     }
 
     /** Each component's descriptor (its release asset) and digests.json, into the chart's files/descriptors. */
@@ -200,7 +202,7 @@ export class ChartBuildCli
     {
     }
 
-    public static async Run(argv: readonly string[], env: NodeJS.ProcessEnv, out: { Out(line: string): void; Err(line: string): void }, assets?: IComponentAssetSource, helm?: IHelm): Promise<number>
+    public static async Run(argv: readonly string[], env: NodeJS.ProcessEnv, out: { Out(line: string): void; Err(line: string): void }, assets?: IComponentAssetSource, helm?: IHelm, releases?: IPublishedReleases): Promise<number>
     {
         const C = ChartBuildCli
         const manifestPath = C.Value(argv, C.ManifestFlag)
@@ -216,7 +218,8 @@ export class ChartBuildCli
             const namespace = env[C.NamespaceEnv] ?? C.DefaultNamespace
             const source = assets ?? new GitHubComponentAssetSource(undefined, env[C.TokenEnv])
             const base = argv.includes(C.PushFlag) ? ChartBuild.OciBaseOf(C.RegistryHost, namespace) : undefined
-            const result = await new ChartBuild(source, helm).Run(manifest, outDir, base)
+            const published = base === undefined ? undefined : (releases ?? PublishedRelease.FromEnvironment(env))
+            const result = await new ChartBuild(source, helm, ChartBuild.DefaultChartDir, published).Run(manifest, outDir, base)
             out.Out(C.VersionPrefix + result.Version)
             out.Out(C.PackagePrefix + result.Package)
             if (result.Digest !== undefined)

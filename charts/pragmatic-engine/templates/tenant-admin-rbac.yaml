@@ -66,6 +66,20 @@ metadata:
   labels:
     {{- include "engine.hiveLabels" . | nindent 4 }}
 rules:
+  {{- if include "engine.standalone" . }}
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["pragmatic-config-pragmatic-tenant-admin"]
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["pragmatic-secrets-pragmatic-tenant-admin"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: [{{ $name | quote }}]
+    verbs: ["get", "patch"]
+  {{- else }}
   - apiGroups: [""]
     resources: ["configmaps"]
     resourceNames: ["pragmatic-config-pragmatic-hive-agent", "pragmatic-config-pragmatic-tenant-admin"]
@@ -78,6 +92,7 @@ rules:
     resources: ["deployments"]
     resourceNames: [{{ include "engine.agentName" . | quote }}, {{ $name | quote }}]
     verbs: ["get", "patch"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -114,6 +129,11 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     resourceNames: [{{ $idpNs | quote }}]
+    verbs: ["get", "patch"]
+  # The sign-in service Ingress's copy of the console certificate, kept current by the console (IngressTlsCopies).
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ $tls | quote }}]
     verbs: ["get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

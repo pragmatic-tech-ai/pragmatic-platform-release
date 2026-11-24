@@ -41,7 +41,6 @@ the hive agent pragmatic-hive-<hive>-agent, all in pragmatic-system.
 {{- define "engine.idpBrowserUrl" -}}https://{{ include "engine.idpHost" . }}{{ include "engine.portSuffix" . }}{{- end -}}
 {{- define "engine.agentName" -}}pragmatic-hive-{{ include "engine.hive" . }}-agent{{- end -}}
 {{- define "engine.agentTokenSecret" -}}pragmatic-hive-{{ include "engine.hive" . }}-agent-token{{- end -}}
-{{- define "engine.postgresHost" -}}pragmatic-postgres.{{ include "engine.namespace" . }}.svc{{- end -}}
 
 {{/* The console's TLS Secret: the operator's, or the minted self-signed one. */}}
 {{- define "engine.consoleTlsSecret" -}}
@@ -52,11 +51,21 @@ pragmatic-console-tls
 {{- end -}}
 {{- end -}}
 
+{{/* The release's images (files/images.json, baked by tools/chart-build.ts): { "<app>": { "repository", "digest" } }. */}}
+{{- define "engine.images" -}}
+{{- $file := .Files.Get "files/images.json" -}}
+{{- if not $file -}}
+{{- fail "the chart carries no release images (files/images.json): install a published release of the chart" -}}
+{{- end -}}
+{{- $file -}}
+{{- end -}}
+
 {{/* An image by digest: <registry>/<repository>@<digest>. */}}
 {{- define "engine.image" -}}
-{{- $image := index .root.Values.images.apps .app -}}
-{{- if hasPrefix "sha256:0000000000000000" $image.digest -}}
-{{- fail (printf "images.apps.%s has no release digest: install a published release of the chart" .app) -}}
+{{- $images := include "engine.images" .root | fromJson -}}
+{{- $image := index $images .app -}}
+{{- if not $image -}}
+{{- fail (printf "the chart's release images name no %s" .app) -}}
 {{- end -}}
 {{- printf "%s/%s@%s" .root.Values.images.registry $image.repository $image.digest -}}
 {{- end -}}
@@ -65,7 +74,7 @@ pragmatic-console-tls
 pragmatic/hive: {{ include "engine.hive" . }}
 {{- end -}}
 
-{{/* What a minted or kept object carries so helm uninstall leaves it. */}}
+{{/* What a chart object carries so helm uninstall leaves it (a reinstall under the same release name adopts it again). */}}
 {{- define "engine.keep" -}}
 helm.sh/resource-policy: keep
 {{- end -}}
@@ -132,8 +141,43 @@ ingressClassName: {{ .Values.ingress.className }}
 {{- end }}
 {{- end -}}
 
+{{/* The hook objects' delete policy: replaced on the next run, removed once the hooks succeeded or one failed. */}}
+{{- define "engine.hookObject" -}}
+helm.sh/hook: pre-install,pre-upgrade
+helm.sh/hook-weight: {{ .weight | quote }}
+helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+{{- end -}}
+
+{{/* A hook Job: kept after a failure, so its log says why (the next run replaces it). */}}
+{{- define "engine.hookJob" -}}
+helm.sh/hook: pre-install,pre-upgrade
+helm.sh/hook-weight: {{ .weight | quote }}
+helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+{{- end -}}
+
 {{- define "engine.storageClass" -}}
 {{- if .Values.storage.className }}
 storageClassName: {{ .Values.storage.className }}
 {{- end }}
+{{- end -}}
+
+{{/* What the bootstrap steps are told (BootstrapSettings): public values only. */}}
+{{- define "engine.bootstrapEnv" -}}
+- name: PRAGMATIC_BOOTSTRAP_NAMESPACE
+  valueFrom:
+    fieldRef:
+      fieldPath: metadata.namespace
+- { name: PRAGMATIC_BOOTSTRAP_IDP_NAMESPACE, value: {{ include "engine.idpName" . | quote }} }
+- { name: PRAGMATIC_BOOTSTRAP_LEVEL, value: {{ .Values.level | quote }} }
+- { name: PRAGMATIC_BOOTSTRAP_TENANT_ID, value: {{ include "engine.tenant" . | quote }} }
+- { name: PRAGMATIC_BOOTSTRAP_TENANT_NAME, value: {{ include "engine.tenantName" . | quote }} }
+- { name: PRAGMATIC_BOOTSTRAP_HIVE_ID, value: {{ include "engine.hive" . | quote }} }
+- { name: PRAGMATIC_BOOTSTRAP_HIVE_LABEL, value: {{ include "engine.hiveName" . | quote }} }
+- { name: PRAGMATIC_BOOTSTRAP_CONSOLE_HOST, value: {{ .Values.console.host | quote }} }
+- { name: PRAGMATIC_BOOTSTRAP_BASE_DOMAIN, value: {{ include "engine.baseDomain" . | quote }} }
+- { name: PRAGMATIC_BOOTSTRAP_IDP_HOST, value: {{ include "engine.idpHost" . | quote }} }
+- { name: PRAGMATIC_BOOTSTRAP_IDP_INTERNAL_HOST, value: {{ include "engine.idpInternalHost" . | quote }} }
+- { name: PRAGMATIC_BOOTSTRAP_TLS_MODE, value: {{ .Values.tls.mode | quote }} }
+- { name: PRAGMATIC_BOOTSTRAP_TLS_SECRET, value: {{ if include "engine.selfSigned" . }}""{{ else }}{{ include "engine.consoleTlsSecret" . | quote }}{{ end }} }
+- { name: PRAGMATIC_BOOTSTRAP_OWNER_EMAIL, value: {{ include "engine.ownerEmail" . | quote }} }
 {{- end -}}

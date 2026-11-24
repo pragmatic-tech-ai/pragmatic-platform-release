@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
@@ -68,8 +69,8 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
         assert.deepEqual(RenderFixture.Workloads(docs), [
             'Deployment/pragmatic-hive-acme-hive-agent', 'Deployment/pragmatic-idp-acme', 'Deployment/pragmatic-tenant-admin-acme', 'StatefulSet/pragmatic-postgres',
         ])
-        assert.deepEqual(RenderFixture.Jobs(docs), ['pragmatic-engine-bootstrap:pre-install,pre-upgrade:-10', 'pragmatic-engine-preflight:pre-install,pre-upgrade:-20'])
-        for (const name of ['pragmatic-engine-descriptors', 'pragmatic-engine-trust-root', 'pragmatic-engine-release', 'pragmatic-postgres-applications'])
+        assert.equal(RenderFixture.Jobs(docs).length, 3)
+        for (const name of ['pragmatic-engine-descriptors', 'pragmatic-engine-release-keys', 'pragmatic-engine-release', 'pragmatic-postgres-applications'])
         {
             assert.ok(ChartFixture.Find(docs, 'ConfigMap', name), name)
         }
@@ -201,9 +202,67 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
         }
     })
 
-    it('refuses a chart without the release digests', () =>
+    it('no value can change a release image: the schema refuses images.apps, a mirror may only replace the registry', () =>
     {
-        assert.match(ChartFixture.Refusal({ ...RenderFixture.Connected, 'images.apps.pragmatic-postgres.digest': 'sha256:' + '0'.repeat(64) }), /no release digest/)
+        assert.match(ChartFixture.Refusal({ ...RenderFixture.Connected, 'images.apps.pragmatic-postgres.digest': 'sha256:' + '0'.repeat(64) }), /images/)
+        const docs = ChartFixture.Render(RenderFixture.Connected)
+        const allowList = JSON.parse(ChartFixture.Find(docs, 'ConfigMap', 'pragmatic-engine-release')!.data!['verified-images.json']) as Array<{ imageRef: string }>
+        assert.deepEqual(allowList.map(i => i.imageRef.split('@')[0]), ['ghcr.io/pragmatic-tech-ai/pragmatic-env-server', 'ghcr.io/pragmatic-tech-ai/pragmatic-ui-unpack'], 'environments may run only these')
+    })
+
+    it('the bootstrap reads and writes Secrets only by name in the engine\'s two namespaces, and every hook account goes with its hooks', () =>
+    {
+        const docs = ChartFixture.Render(RenderFixture.Connected)
+        const hooks = docs.filter(d => d.metadata.annotations?.['helm.sh/hook'] !== undefined)
+        for (const role of hooks.filter(d => d.kind === 'ClusterRole'))
+        {
+            const resources = (role.rules ?? []).flatMap((r: any) => r.resources ?? [])
+            assert.equal(resources.includes('secrets'), false, role.metadata.name + ' grants no Secret access cluster-wide')
+        }
+        const roles = hooks.filter(d => d.kind === 'Role' && d.metadata.name === 'pragmatic-engine-bootstrap')
+        assert.deepEqual(roles.map(r => r.metadata.namespace).sort(), ['pragmatic-idp-acme', 'pragmatic-system'])
+        for (const role of roles)
+        {
+            const read = (role.rules ?? []).find((r: any) => (r.verbs as string[]).includes('get'))
+            assert.ok(Array.isArray(read.resourceNames) && read.resourceNames.length > 0, 'reads only named Secrets')
+        }
+        for (const object of hooks.filter(d => d.kind !== 'Job'))
+        {
+            assert.match(object.metadata.annotations!['helm.sh/hook-delete-policy'], /hook-failed/, object.kind + '/' + object.metadata.name)
+        }
+        assert.deepEqual(RenderFixture.Jobs(docs), [
+            'pragmatic-engine-bootstrap:pre-install,pre-upgrade:-10', 'pragmatic-engine-namespace:pre-install,pre-upgrade:-18', 'pragmatic-engine-preflight:pre-install,pre-upgrade:-20',
+        ])
+    })
+
+    it('only the ingress controller, the console and this hive\'s environments reach the sign-in service and Postgres', () =>
+    {
+        const docs = ChartFixture.Render(RenderFixture.Connected)
+        const idp = ChartFixture.Find(docs, 'NetworkPolicy', 'pragmatic-idp-acme')!
+        assert.equal(idp.metadata.namespace, 'pragmatic-idp-acme')
+        assert.deepEqual(idp.spec.ingress[0].ports, [{ protocol: 'TCP', port: 9443 }])
+        assert.equal(idp.spec.ingress[0].from.length, 3)
+        assert.ok(ChartFixture.Find(docs, 'NetworkPolicy', 'pragmatic-postgres'))
+        // The console and the environments reach Postgres at EnvironmentHiveDatabase.ServiceHost (pragmatic-tenant-plane).
+        const service = ChartFixture.Find(docs, 'Service', 'pragmatic-postgres')!
+        assert.equal(service.metadata.name + '.' + service.metadata.namespace + '.svc', 'pragmatic-postgres.pragmatic-system.svc')
+    })
+
+    it('a standalone console configures no agent; the console Ingress allows long API calls', () =>
+    {
+        const standalone = ChartFixture.Render(RenderFixture.Standalone)
+        const role = standalone.find(d => d.kind === 'Role' && d.metadata.name === 'pragmatic-tenant-admin-acme-configuration' && d.metadata.namespace === 'pragmatic-system')!
+        assert.equal(JSON.stringify(role.rules).includes('hive-agent'), false)
+        assert.equal(ChartFixture.Find(standalone, 'Ingress', 'pragmatic-tenant-admin-acme')?.metadata.annotations?.['nginx.ingress.kubernetes.io/proxy-read-timeout'], '180')
+        const env = (ChartFixture.Find(standalone, 'Deployment', 'pragmatic-tenant-admin-acme')!.spec.template.spec.containers[0].env as any[])
+        assert.equal(env.find(e => e.name === 'PRAGMATIC_TENANT_ADMIN_RELEASE_KEYS_DIR')?.value, '/etc/pragmatic/release-keys')
+        assert.ok('release-2026-11.pub.pem' in (ChartFixture.Find(standalone, 'ConfigMap', 'pragmatic-engine-release-keys')?.data ?? {}))
+    })
+
+    it('helm lint passes on the chart as a release builds it', () =>
+    {
+        const lint = spawnSync('helm', ['lint', ChartFixture.Chart(), '--namespace', 'pragmatic-system', '--set', 'tenant.id=acme', '--set', 'console.host=console.acme.example', '--set', 'tls.mode=self-signed'], { encoding: 'utf8' })
+        assert.equal(lint.status, 0, lint.stdout + lint.stderr)
     })
 
     it('goldens for the three modes', () =>

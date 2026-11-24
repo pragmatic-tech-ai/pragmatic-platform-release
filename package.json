@@ -21,12 +21,12 @@
     "chart:build": "tsx tools/bin/chart-build.ts"
   },
   "dependencies": {
-    "@pragmatic-tech-ai/pragmatic-release-toolkit": "^0.18.15",
-    "yaml": "^2.6.0"
+    "@pragmatic-tech-ai/pragmatic-release-toolkit": "^0.18.15"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "yaml": "^2.6.0"
   }
 }

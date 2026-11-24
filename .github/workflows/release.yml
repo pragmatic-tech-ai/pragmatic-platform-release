@@ -6,7 +6,8 @@
 # tools/bin/release-manifest.ts verify, which stops the run unless the tagged commit has a valid release.json naming the
 # tag's version. Job `chart` (packages: write, no signing key): tools/bin/chart-build.ts builds the release's
 # pragmatic-engine chart (release.json's image digests, the components' descriptors) and pushes it to
-# oci://ghcr.io/pragmatic-tech-ai/charts/pragmatic-engine:<version>, answering its digest. Job `publish` (environment
+# oci://ghcr.io/pragmatic-tech-ai/charts/pragmatic-engine:<version>, answering its digest (refused for a version already
+# published: its signed descriptor binds the chart pushed then). Job `publish` (environment
 # `release`, the only holder of RELEASE_SIGNING_KEY):
 # a production install (the toolkit's plain dist JS, no install scripts), then the toolkit's `pragmatic-release-publish
 # assemble` (every image at its digest and labelled with the digest of its repository's v<version> component.json, the
@@ -96,6 +97,8 @@ jobs:
         id: build
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_REGISTRY_USER: ${{ github.actor }}
+          RELEASE_REGISTRY_TOKEN: ${{ github.token }}
         run: |
           npx --no-install tsx tools/bin/chart-build.ts --manifest release.json --out "$RUNNER_TEMP/chart" --push | tee "$RUNNER_TEMP/chart.out"
           grep '^digest=sha256:' "$RUNNER_TEMP/chart.out" >> "$GITHUB_OUTPUT"

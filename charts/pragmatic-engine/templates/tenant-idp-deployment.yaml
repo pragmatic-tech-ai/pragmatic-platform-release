@@ -42,7 +42,7 @@ spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
       securityContext:
-        {{- include "engine.podSecurity" (dict "uid" 1000) | nindent 8 }}
+        {{- include "engine.podSecurity" (dict "uid" 10001) | nindent 8 }}
       containers:
         - name: idp
           image: {{ include "engine.image" (dict "root" . "app" "pragmatic-tenant-idp") }}
@@ -68,7 +68,7 @@ spec:
               scheme: HTTPS
             periodSeconds: 10
           securityContext:
-            {{- include "engine.containerSecurity" (dict "uid" 1000) | nindent 12 }}
+            {{- include "engine.containerSecurity" (dict "uid" 10001) | nindent 12 }}
           resources:
             {{- toYaml .Values.resources.idp | nindent 12 }}
           volumeMounts:
@@ -143,3 +143,37 @@ spec:
                 name: {{ $name }}
                 port:
                   number: 9443
+---
+# The sign-in service trusts the forwarded client address, so only the ingress controller, the console and this hive's
+# environments (their servers federate with it over its internal URL) may reach it; no other pod can forge that address.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  namespace: {{ $idpNs }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      pragmatic/app: {{ $name }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.ingress.namespace }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ include "engine.namespace" . }}
+          podSelector:
+            matchLabels:
+              pragmatic/app: {{ include "engine.consoleName" . }}
+        - namespaceSelector:
+            matchLabels:
+              {{- include "engine.hiveLabels" . | nindent 14 }}
+            matchExpressions:
+              - { key: pragmatic/environment, operator: Exists }
+      ports:
+        - protocol: TCP
+          port: 9443

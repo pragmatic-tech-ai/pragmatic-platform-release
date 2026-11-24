@@ -8,7 +8,7 @@ Wait until every pod is ready:
   kubectl get pods -n {{ include "engine.namespace" . }}
   kubectl get pods -n {{ include "engine.idpName" . }}
 
-The Owner ({{ include "engine.ownerEmail" . }}) signs in once with this one-time password:
+The Owner ({{ include "engine.ownerEmail" . }}) first signs in with this initial password (change it once signed in):
   kubectl get secret pragmatic-owner-initial -n {{ include "engine.namespace" . }} -o jsonpath='{.data.password}' | base64 -d
 {{- if include "engine.selfSigned" . }}
 
@@ -27,5 +27,7 @@ This hive is connected but not enrolled yet: the console's Connection status sho
 This engine runs standalone: it never contacts Pragmatic. Upgrade it with helm upgrade.
 {{- end }}
 
-Uninstalling keeps the database, the console data and every engine secret (helm.sh/resource-policy: keep): a reinstall
-finds them. A failed preflight says why in: kubectl logs -n {{ include "engine.namespace" . }} job/pragmatic-engine-preflight
+Uninstalling keeps the database, the console data and every engine secret: a reinstall under the same release name
+(pragmatic-engine) and the same tenant.id finds them. A failed preflight says why in:
+  kubectl logs -n {{ include "engine.namespace" . }} job/pragmatic-engine-preflight
+then: helm uninstall pragmatic-engine -n {{ include "engine.namespace" . }} before installing again.

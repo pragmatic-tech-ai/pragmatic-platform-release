@@ -56,26 +56,18 @@ storage:
 postgres:
   size: 10Gi
 
-# The public key the console verifies signed releases against (default: the published release key).
+# The public key the console verifies signed releases against (default: the published release key), by its key id.
 trustRoot:
+  keyId: release-2026-11
   publicKey: |
     -----BEGIN PUBLIC KEY-----
     MCowBQYDK2VwAyEAt4UFSruS/uj5bU6i9fQtc+mSG/4sqYXjPHGQgOMrock=
     -----END PUBLIC KEY-----
 
 images:
-  # A mirror may replace the registry; repositories and digests are the release's (tools/chart-build.ts fills them).
+  # A mirror may replace the registry. The repositories and digests are the release's, baked into the chart
+  # (files/images.json, written by tools/chart-build.ts): no value can change them.
   registry: ghcr.io
-  apps:
-    pragmatic-hive-agent: { repository: pragmatic-tech-ai/pragmatic-hive-agent, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
-    pragmatic-tenant-admin: { repository: pragmatic-tech-ai/pragmatic-tenant-admin, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
-    pragmatic-tenant-idp: { repository: pragmatic-tech-ai/pragmatic-tenant-idp, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
-    pragmatic-postgres: { repository: pragmatic-tech-ai/pragmatic-postgres, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
-    pragmatic-env-server: { repository: pragmatic-tech-ai/pragmatic-env-server, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
-    pragmatic-env-gateway: { repository: pragmatic-tech-ai/pragmatic-env-gateway, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
-    pragmatic-ui-unpack: { repository: pragmatic-tech-ai/pragmatic-ui-unpack, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
-    pragmatic-platform-admin: { repository: pragmatic-tech-ai/pragmatic-platform-admin, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
-    pragmatic-platform-edge: { repository: pragmatic-tech-ai/pragmatic-platform-edge, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
 
 agent:
   # The platform's agent channel (level connected only).

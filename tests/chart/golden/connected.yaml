@@ -55,10 +55,45 @@ spec:
         - protocol: TCP
           port: 7100
 ---
+# Source: pragmatic-engine/templates/tenant-idp-deployment.yaml
+# The sign-in service trusts the forwarded client address, so only the ingress controller, the console and this hive's
+# environments (their servers federate with it over its internal URL) may reach it; no other pod can forge that address.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pragmatic-idp-acme
+  namespace: pragmatic-idp-acme
+  labels:
+    pragmatic/hive: acme-hive
+spec:
+  podSelector:
+    matchLabels:
+      pragmatic/app: pragmatic-idp-acme
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: pragmatic-system
+          podSelector:
+            matchLabels:
+              pragmatic/app: pragmatic-tenant-admin-acme
+        - namespaceSelector:
+            matchLabels:
+              pragmatic/hive: acme-hive
+            matchExpressions:
+              - { key: pragmatic/environment, operator: Exists }
+      ports:
+        - protocol: TCP
+          port: 9443
+---
 # Source: pragmatic-engine/templates/hive-agent-deployment.yaml
 # The hive agent (level connected): idle until the hive is enrolled (C3.3 writes its token), then it polls the platform's
-# agent channel. Hosted hives (set by the host agent) bind it to cluster-admin; otherwise it gets the placer role, which
-# grants no read of Secrets, no pods/exec, pods/portforward or services/proxy.
+# agent channel. Hosted hives (set by the host agent) bind it to cluster-admin; otherwise it gets the placer role, empty in
+# this release (never a read of Secrets, pods/exec, pods/portforward or services/proxy).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -127,20 +162,21 @@ data:
     pragmatic-tenant-admin tenant_admin tenant_admin
     pragmatic-tenant-idp tenant_idp tenant_idp
 ---
-# Source: pragmatic-engine/templates/trust-root-configmap.yaml
-# The public key the console verifies signed releases against.
+# Source: pragmatic-engine/templates/release-configmaps.yaml
+# The public key the console verifies signed releases against (its release-keys folder: <key id>.pub.pem).
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: pragmatic-engine-trust-root
+  name: pragmatic-engine-release-keys
   namespace: pragmatic-system
   labels:
     pragmatic/hive: acme-hive
 data:
-  trust-root.pub: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAt4UFSruS/uj5bU6i9fQtc+mSG/4sqYXjPHGQgOMrock=\n-----END PUBLIC KEY-----\n"
+  release-2026-11.pub.pem: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAt4UFSruS/uj5bU6i9fQtc+mSG/4sqYXjPHGQgOMrock=\n-----END PUBLIC KEY-----\n"
 ---
-# Source: pragmatic-engine/templates/trust-root-configmap.yaml
-# The release's images the console may run in its environments (PinnedImageVerifier's allow-list), by digest.
+# Source: pragmatic-engine/templates/release-configmaps.yaml
+# The release's images the console may run in its environments (PinnedImageVerifier's allow-list), by digest: the
+# environment server and the UI unpacker only.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -149,7 +185,7 @@ metadata:
   labels:
     pragmatic/hive: acme-hive
 data:
-  verified-images.json: "[{\"imageRef\":\"ghcr.io/pragmatic-tech-ai/pragmatic-env-gateway@sha256:8d2bb7fd161aabbfb0b5090f8a608de779322a34e640865c648505eac916ebc1\"},{\"imageRef\":\"ghcr.io/pragmatic-tech-ai/pragmatic-env-server@sha256:c147bbacbef86760ca19c158833956667ebdfa0f15cf1c9878a708468d83674a\"},{\"imageRef\":\"ghcr.io/pragmatic-tech-ai/pragmatic-hive-agent@sha256:68aa7746ab947a2525fea72525fcc9e99db4fe0aa7d8ce9071a597a09397b74e\"},{\"imageRef\":\"ghcr.io/pragmatic-tech-ai/pragmatic-platform-admin@sha256:a621a1a0a4bab5d6674e338a466cb4aeffdf184197727b3a14341659967a9596\"},{\"imageRef\":\"ghcr.io/pragmatic-tech-ai/pragmatic-platform-edge@sha256:c6169530cfa96803163c0f716ac8e89fb4eb87c33ac388224e6e6eebb5c32662\"},{\"imageRef\":\"ghcr.io/pragmatic-tech-ai/pragmatic-postgres@sha256:3c11fad0dc9d095e8ec2a11f7ebe802e29d622a32f023c9bb6688ee4ee6dc489\"},{\"imageRef\":\"ghcr.io/pragmatic-tech-ai/pragmatic-tenant-admin@sha256:7b2c2735355720d63b9f1b6f3ce21603521b78ea68fdada9694ba67e1c1fc63a\"},{\"imageRef\":\"ghcr.io/pragmatic-tech-ai/pragmatic-tenant-idp@sha256:a4f2d051773e7162d061eeb10b5ac34048c4a380ff92792372194bc9f6f53a54\"},{\"imageRef\":\"ghcr.io/pragmatic-tech-ai/pragmatic-ui-unpack@sha256:fd41dd9614e31684498e612ed865f78167f20c88668943da238aa10109e06cf6\"}]"
+  verified-images.json: "[{\"imageRef\":\"ghcr.io/pragmatic-tech-ai/pragmatic-env-server@sha256:c147bbacbef86760ca19c158833956667ebdfa0f15cf1c9878a708468d83674a\"},{\"imageRef\":\"ghcr.io/pragmatic-tech-ai/pragmatic-ui-unpack@sha256:fd41dd9614e31684498e612ed865f78167f20c88668943da238aa10109e06cf6\"}]"
   release: "0.0.0"
 ---
 # Source: pragmatic-engine/templates/postgres-statefulset.yaml
@@ -198,10 +234,8 @@ metadata:
   name: pragmatic-hive-agent-placer
   labels:
     pragmatic/hive: acme-hive
-rules:
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "patch"]
+# Empty until enrolment: an idle agent needs no access; what it may place is granted with the hive's level (C3.3, C3.4).
+rules: []
 ---
 # Source: pragmatic-engine/templates/tenant-admin-rbac.yaml
 # The console's access, as the platform's console install grants it: it creates and deletes its own hive's environment
@@ -318,6 +352,11 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     resourceNames: ["pragmatic-idp-acme"]
+    verbs: ["get", "patch"]
+  # The sign-in service Ingress's copy of the console certificate, kept current by the console (IngressTlsCopies).
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["pragmatic-console-tls"]
     verbs: ["get", "patch"]
 ---
 # Source: pragmatic-engine/templates/tenant-admin-rbac.yaml
@@ -567,7 +606,7 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       initContainers:
-        # The directory seed, master key, trust root and the release's image allow-list into the data folder.
+        # The directory seed, the master key and the release's image allow-list into the data folder.
         - name: seed
           image: ghcr.io/pragmatic-tech-ai/pragmatic-tenant-admin@sha256:7b2c2735355720d63b9f1b6f3ce21603521b78ea68fdada9694ba67e1c1fc63a
           command: ["sh", "-c", "cp -f --no-preserve=mode /seed/* /data/"]
@@ -617,6 +656,8 @@ spec:
             - { name: PRAGMATIC_IDP_ADMIN_TOKEN_FILE, value: /idp/token/admin-token }
             - { name: PRAGMATIC_TENANT_ADMIN_INGRESS_TLS_SOURCE, value: existing-secret }
             - { name: PRAGMATIC_TENANT_ADMIN_INGRESS_TLS_SECRET, value: "pragmatic-console-tls" }
+            - { name: PRAGMATIC_TENANT_ADMIN_INGRESS_CLASS, value: "" }
+            - { name: PRAGMATIC_TENANT_ADMIN_RELEASE_KEYS_DIR, value: /etc/pragmatic/release-keys }
             - { name: PRAGMATIC_TENANT_ADMIN_FINGERPRINT_KEY_FILE, value: /fingerprint/fingerprint.key }
             - { name: PRAGMATIC_TENANT_ADMIN_DATABASE_URL_FILE, value: /run/secrets/tenant-admin-database/database-url }
             - { name: PRAGMATIC_ENGINE_MODE, value: "connected" }
@@ -656,6 +697,7 @@ spec:
             - { name: hive-postgres, mountPath: /run/secrets/hive-postgres, readOnly: true }
             - { name: owner-initial, mountPath: /run/secrets/pragmatic-owner-initial, readOnly: true }
             - { name: release-descriptors, mountPath: /etc/pragmatic/descriptors, readOnly: true }
+            - { name: release-keys, mountPath: /etc/pragmatic/release-keys, readOnly: true }
             - name: cfg-tenant-admin
               mountPath: /etc/pragmatic/configuration
               readOnly: true
@@ -681,9 +723,6 @@ spec:
                   name: pragmatic-tenant-admin-master-key
                   items: [{ key: master.key, path: master.key }]
               - configMap:
-                  name: pragmatic-engine-trust-root
-                  items: [{ key: trust-root.pub, path: trust-root.pub }]
-              - configMap:
                   name: pragmatic-engine-release
                   items: [{ key: verified-images.json, path: verified-images.json }]
         # Only the public CA certificate of the sign-in service, never its key.
@@ -701,6 +740,8 @@ spec:
           secret: { secretName: pragmatic-owner-initial, defaultMode: 288, items: [{ key: email, path: email }, { key: password, path: password }] }
         - name: release-descriptors
           configMap: { name: pragmatic-engine-descriptors }
+        - name: release-keys
+          configMap: { name: pragmatic-engine-release-keys }
         - name: cfg-tenant-admin
           configMap:
             name: pragmatic-config-pragmatic-tenant-admin
@@ -750,7 +791,7 @@ spec:
       enableServiceLinks: false
       securityContext:
         runAsNonRoot: true
-        fsGroup: 1000
+        fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -779,8 +820,8 @@ spec:
             periodSeconds: 10
           securityContext:
             runAsNonRoot: true
-            runAsUser: 1000
-            runAsGroup: 1000
+            runAsUser: 10001
+            runAsGroup: 10001
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
@@ -961,6 +1002,9 @@ metadata:
   namespace: pragmatic-system
   labels:
     pragmatic/hive: acme-hive
+  annotations:
+    # Long tenant API calls (an environment's creation) outlast nginx's 60-second default.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "180"
 spec:
   
   tls:
@@ -1059,9 +1103,21 @@ spec:
   validationActions: ["Deny"]
 ---
 # Source: pragmatic-engine/templates/bootstrap-job.yaml
-# Bootstrap (pre-install, pre-upgrade; after the preflight): the console image creates the realm sign-in service's
-# namespace and mints every absent engine Secret inside the cluster (never replacing one), so this chart's values stay
-# secret-free. Its account may create Secrets and ConfigMaps and read or update only the engine's own Secrets by name.
+# Bootstrap (pre-install, pre-upgrade; after the preflight), in two steps with the console image. First the realm sign-in
+# service's namespace (its account may create namespaces and read only that one). Then, under Roles bound in the engine's
+# two namespaces only, every absent engine Secret is minted inside the cluster (never replacing one), so this chart's
+# values stay secret-free. No account here may read a Secret outside those two namespaces or by another name.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pragmatic-engine-namespace
+  namespace: pragmatic-system
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-19"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+---
+# Source: pragmatic-engine/templates/bootstrap-job.yaml
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -1070,12 +1126,13 @@ metadata:
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-15"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
 ---
 # Source: pragmatic-engine/templates/preflight-job.yaml
 # Preflight (pre-install, pre-upgrade; before anything else): the hive agent image checks the cluster version, the storage
 # and ingress classes, the published names and the certificate. A failing check fails this Job and Helm stops before any
-# workload is created; read why with: kubectl logs -n pragmatic-system job/pragmatic-engine-preflight
+# workload is created; read why with: kubectl logs -n pragmatic-system job/pragmatic-engine-preflight, then
+# helm uninstall pragmatic-engine -n pragmatic-system before installing again.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -1084,17 +1141,17 @@ metadata:
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-30"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
 ---
 # Source: pragmatic-engine/templates/bootstrap-job.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: pragmatic-engine-bootstrap
+  name: pragmatic-engine-namespace
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
-    helm.sh/hook-weight: "-15"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-weight: "-19"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
 rules:
   - apiGroups: [""]
     resources: ["namespaces"]
@@ -1103,21 +1160,22 @@ rules:
     resources: ["namespaces"]
     resourceNames: ["pragmatic-idp-acme"]
     verbs: ["get"]
+---
+# Source: pragmatic-engine/templates/bootstrap-job.yaml
+# The bootstrap reads only that the sign-in service's namespace exists (the namespace step made it).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pragmatic-engine-bootstrap
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-15"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+rules:
   - apiGroups: [""]
-    resources: ["secrets", "configmaps"]
-    verbs: ["create"]
-  # Read (a copy's source, a kept certificate) and update (a copy) only the engine's own Secrets.
-  - apiGroups: [""]
-    resources: ["secrets"]
-    resourceNames:
-      - pragmatic-postgres-app-tenant-idp
-      - pragmatic-tenant-idp-admin-token
-      - pragmatic-tenant-idp-tls
-      - pragmatic-tenant-idp-ca
-      - pragmatic-tenant-idp-database
-      - pragmatic-tls-dev-ca
-      - "pragmatic-console-tls"
-    verbs: ["get", "patch"]
+    resources: ["namespaces"]
+    resourceNames: ["pragmatic-idp-acme"]
+    verbs: ["get"]
 ---
 # Source: pragmatic-engine/templates/preflight-job.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -1127,7 +1185,7 @@ metadata:
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-30"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
 rules:
   - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses"]
@@ -1142,11 +1200,29 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
+  name: pragmatic-engine-namespace
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-19"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pragmatic-engine-namespace
+subjects:
+  - kind: ServiceAccount
+    name: pragmatic-engine-namespace
+    namespace: pragmatic-system
+---
+# Source: pragmatic-engine/templates/bootstrap-job.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
   name: pragmatic-engine-bootstrap
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-15"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -1164,7 +1240,7 @@ metadata:
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-30"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -1173,6 +1249,167 @@ subjects:
   - kind: ServiceAccount
     name: pragmatic-engine-preflight
     namespace: pragmatic-system
+---
+# Source: pragmatic-engine/templates/bootstrap-job.yaml
+# In pragmatic-system: create Secrets and the configuration objects; read and update only the engine's own Secrets, by name.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pragmatic-engine-bootstrap
+  namespace: pragmatic-system
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-15"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+rules:
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - pragmatic-postgres-superuser
+      - pragmatic-postgres-app-tenant-admin
+      - pragmatic-postgres-app-tenant-idp
+      - pragmatic-tenant-admin-master-key
+      - pragmatic-tenant-admin-fingerprint
+      - pragmatic-tenant-admin-seed
+      - pragmatic-tenant-idp-admin-token
+      - pragmatic-owner-initial
+      - pragmatic-tenant-idp-ca
+      - pragmatic-tls-dev-ca
+      - "pragmatic-console-tls"
+    verbs: ["get", "patch"]
+---
+# Source: pragmatic-engine/templates/bootstrap-job.yaml
+# In pragmatic-idp-acme: create Secrets and the configuration objects; read and update only the engine's own Secrets, by name.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pragmatic-engine-bootstrap
+  namespace: pragmatic-idp-acme
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-15"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+rules:
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - pragmatic-tenant-idp-master-key
+      - pragmatic-tenant-idp-signing-key
+      - pragmatic-tenant-idp-tls
+      - pragmatic-tenant-idp-admin-token
+      - pragmatic-tenant-idp-database
+      - "pragmatic-console-tls"
+    verbs: ["get", "patch"]
+---
+# Source: pragmatic-engine/templates/bootstrap-job.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pragmatic-engine-bootstrap
+  namespace: pragmatic-system
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-15"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: pragmatic-engine-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: pragmatic-engine-bootstrap
+    namespace: pragmatic-system
+---
+# Source: pragmatic-engine/templates/bootstrap-job.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pragmatic-engine-bootstrap
+  namespace: pragmatic-idp-acme
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-15"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: pragmatic-engine-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: pragmatic-engine-bootstrap
+    namespace: pragmatic-system
+---
+# Source: pragmatic-engine/templates/bootstrap-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pragmatic-engine-namespace
+  namespace: pragmatic-system
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-18"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pragmatic-engine-namespace
+    spec:
+      serviceAccountName: pragmatic-engine-namespace
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: namespace
+          image: ghcr.io/pragmatic-tech-ai/pragmatic-tenant-admin@sha256:7b2c2735355720d63b9f1b6f3ce21603521b78ea68fdada9694ba67e1c1fc63a
+          command: ["node", "dist/bin/pragmatic-tenant-admind.js", "bootstrap", "namespace"]
+          terminationMessagePolicy: FallbackToLogsOnError
+          env:
+            - name: PRAGMATIC_BOOTSTRAP_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - { name: PRAGMATIC_BOOTSTRAP_IDP_NAMESPACE, value: "pragmatic-idp-acme" }
+            - { name: PRAGMATIC_BOOTSTRAP_LEVEL, value: "connected" }
+            - { name: PRAGMATIC_BOOTSTRAP_TENANT_ID, value: "acme" }
+            - { name: PRAGMATIC_BOOTSTRAP_TENANT_NAME, value: "acme" }
+            - { name: PRAGMATIC_BOOTSTRAP_HIVE_ID, value: "acme-hive" }
+            - { name: PRAGMATIC_BOOTSTRAP_HIVE_LABEL, value: "acme-hive" }
+            - { name: PRAGMATIC_BOOTSTRAP_CONSOLE_HOST, value: "console.acme.example" }
+            - { name: PRAGMATIC_BOOTSTRAP_BASE_DOMAIN, value: "acme.example" }
+            - { name: PRAGMATIC_BOOTSTRAP_IDP_HOST, value: "idp-acme.acme.example" }
+            - { name: PRAGMATIC_BOOTSTRAP_IDP_INTERNAL_HOST, value: "pragmatic-idp-acme.pragmatic-idp-acme.svc.cluster.local" }
+            - { name: PRAGMATIC_BOOTSTRAP_TLS_MODE, value: "self-signed" }
+            - { name: PRAGMATIC_BOOTSTRAP_TLS_SECRET, value: "" }
+            - { name: PRAGMATIC_BOOTSTRAP_OWNER_EMAIL, value: "owner@acme.example" }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 50m
+              memory: 128Mi
 ---
 # Source: pragmatic-engine/templates/bootstrap-job.yaml
 apiVersion: batch/v1
@@ -1209,32 +1446,19 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: PRAGMATIC_BOOTSTRAP_IDP_NAMESPACE
-              value: "pragmatic-idp-acme"
-            - name: PRAGMATIC_BOOTSTRAP_TENANT_ID
-              value: "acme"
-            - name: PRAGMATIC_BOOTSTRAP_TENANT_NAME
-              value: "acme"
-            - name: PRAGMATIC_BOOTSTRAP_HIVE_ID
-              value: "acme-hive"
-            - name: PRAGMATIC_BOOTSTRAP_HIVE_LABEL
-              value: "acme-hive"
-            - name: PRAGMATIC_BOOTSTRAP_CONSOLE_HOST
-              value: "console.acme.example"
-            - name: PRAGMATIC_BOOTSTRAP_BASE_DOMAIN
-              value: "acme.example"
-            - name: PRAGMATIC_BOOTSTRAP_IDP_HOST
-              value: "idp-acme.acme.example"
-            - name: PRAGMATIC_BOOTSTRAP_IDP_INTERNAL_HOST
-              value: "pragmatic-idp-acme.pragmatic-idp-acme.svc.cluster.local"
-            - name: PRAGMATIC_BOOTSTRAP_POSTGRES_HOST
-              value: "pragmatic-postgres.pragmatic-system.svc"
-            - name: PRAGMATIC_BOOTSTRAP_TLS_MODE
-              value: "self-signed"
-            - name: PRAGMATIC_BOOTSTRAP_TLS_SECRET
-              value: ""
-            - name: PRAGMATIC_BOOTSTRAP_OWNER_EMAIL
-              value: "owner@acme.example"
+            - { name: PRAGMATIC_BOOTSTRAP_IDP_NAMESPACE, value: "pragmatic-idp-acme" }
+            - { name: PRAGMATIC_BOOTSTRAP_LEVEL, value: "connected" }
+            - { name: PRAGMATIC_BOOTSTRAP_TENANT_ID, value: "acme" }
+            - { name: PRAGMATIC_BOOTSTRAP_TENANT_NAME, value: "acme" }
+            - { name: PRAGMATIC_BOOTSTRAP_HIVE_ID, value: "acme-hive" }
+            - { name: PRAGMATIC_BOOTSTRAP_HIVE_LABEL, value: "acme-hive" }
+            - { name: PRAGMATIC_BOOTSTRAP_CONSOLE_HOST, value: "console.acme.example" }
+            - { name: PRAGMATIC_BOOTSTRAP_BASE_DOMAIN, value: "acme.example" }
+            - { name: PRAGMATIC_BOOTSTRAP_IDP_HOST, value: "idp-acme.acme.example" }
+            - { name: PRAGMATIC_BOOTSTRAP_IDP_INTERNAL_HOST, value: "pragmatic-idp-acme.pragmatic-idp-acme.svc.cluster.local" }
+            - { name: PRAGMATIC_BOOTSTRAP_TLS_MODE, value: "self-signed" }
+            - { name: PRAGMATIC_BOOTSTRAP_TLS_SECRET, value: "" }
+            - { name: PRAGMATIC_BOOTSTRAP_OWNER_EMAIL, value: "owner@acme.example" }
           securityContext:
             runAsNonRoot: true
             runAsUser: 10001
@@ -1266,9 +1490,9 @@ metadata:
   name: pragmatic-engine-preflight
   namespace: pragmatic-system
   annotations:
+    # A failed preflight Job stays (its log says why); the next install replaces it.
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-20"
-    # A failed preflight Job stays (its log says why); the next install replaces it.
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 0
@@ -1303,6 +1527,8 @@ spec:
               value: "console.acme.example"
             - name: PRAGMATIC_PREFLIGHT_IDP_HOST
               value: "idp-acme.acme.example"
+            - name: PRAGMATIC_PREFLIGHT_BASE_DOMAIN
+              value: "acme.example"
             - name: PRAGMATIC_PREFLIGHT_CONSOLE_ADDRESS
               value: "own-domain"
             - name: PRAGMATIC_PREFLIGHT_TLS_MODE
