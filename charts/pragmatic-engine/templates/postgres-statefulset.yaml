@@ -1,0 +1,166 @@
+{{- $ns := include "engine.namespace" . }}
+# The hive's one pragmatic-postgres: a database and role per application (pragmatic-postgres-applications), the
+# environments' own provisioned by the console with the superuser. Its claim is kept on helm uninstall.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pragmatic-postgres-data
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+    app.kubernetes.io/name: pragmatic-postgres
+  annotations:
+    {{- include "engine.keep" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- include "engine.storageClass" . | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ .Values.postgres.size }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pragmatic-postgres
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+    app.kubernetes.io/name: pragmatic-postgres
+spec:
+  serviceName: pragmatic-postgres
+  replicas: 1
+  # One replica on a ReadWriteOnce claim: the old pod stops before the new one starts (a StatefulSet's ordered update).
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pragmatic-postgres
+  template:
+    metadata:
+      labels:
+        {{- include "engine.hiveLabels" . | nindent 8 }}
+        app.kubernetes.io/name: pragmatic-postgres
+      annotations:
+        pragmatic-tech.ai/applications-hash: {{ include (print $.Template.BasePath "/postgres-applications-configmap.yaml") . | sha256sum | quote }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        {{- include "engine.podSecurity" (dict "uid" 999) | nindent 8 }}
+      containers:
+        - name: postgres
+          image: {{ include "engine.image" (dict "root" . "app" "pragmatic-postgres") }}
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "--host=127.0.0.1", "--quiet"]
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "--host=127.0.0.1", "--quiet"]
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 6
+          securityContext:
+            {{- include "engine.containerSecurity" (dict "uid" 999) | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources.postgres | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: passwords
+              mountPath: /run/secrets/pragmatic-postgres
+              readOnly: true
+            - name: applications
+              mountPath: /etc/pragmatic-postgres
+              readOnly: true
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: pragmatic-postgres-data
+        # The superuser's and every application's password file, as the image's reconcile reads them.
+        - name: passwords
+          projected:
+            defaultMode: 288
+            sources:
+              - secret:
+                  name: pragmatic-postgres-superuser
+                  items:
+                    - { key: password, path: superuser }
+              - secret:
+                  name: pragmatic-postgres-app-tenant-admin
+                  items:
+                    - { key: password, path: applications/pragmatic-tenant-admin }
+              - secret:
+                  name: pragmatic-postgres-app-tenant-idp
+                  items:
+                    - { key: password, path: applications/pragmatic-tenant-idp }
+        - name: applications
+          configMap:
+            name: pragmatic-postgres-applications
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pragmatic-postgres
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+    app.kubernetes.io/name: pragmatic-postgres
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: pragmatic-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+# Only the console, the realm sign-in service and this hive's environments reach Postgres.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pragmatic-postgres
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: pragmatic-postgres
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              pragmatic/app: {{ include "engine.consoleName" . }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ include "engine.idpName" . }}
+          podSelector:
+            matchLabels:
+              pragmatic/app: {{ include "engine.idpName" . }}
+        - namespaceSelector:
+            matchLabels:
+              {{- include "engine.hiveLabels" . | nindent 14 }}
+            matchExpressions:
+              - { key: pragmatic/environment, operator: Exists }
+      ports:
+        - protocol: TCP
+          port: 5432

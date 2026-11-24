@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pragmatic-postgres-applications
+  namespace: {{ include "engine.namespace" . }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+data:
+  # <application> <database> <role>: the image's reconcile creates each at start (an environment's database is the
+  # console's, provisioned by SQL, since a change here needs a Postgres restart).
+  applications.conf: |
+    pragmatic-tenant-admin tenant_admin tenant_admin
+    pragmatic-tenant-idp tenant_idp tenant_idp

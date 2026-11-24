@@ -1,0 +1,92 @@
+# The pragmatic-engine chart's values. None is a secret: every engine secret is minted inside the cluster by the
+# bootstrap hook Job (read the Owner's one-time password with `kubectl get secret pragmatic-owner-initial`).
+#
+#   helm install pragmatic-engine oci://ghcr.io/pragmatic-tech-ai/charts/pragmatic-engine --version <release> \
+#     --namespace pragmatic-system --create-namespace --set tenant.id=<tenant> --set console.host=<host>
+
+# connected: the hive agent is installed, idle until the hive is enrolled. standalone: no agent, no dial-home.
+level: connected
+# Set only by the platform's host agent (Hosted hives): binds the agent to cluster-admin.
+hosted: false
+
+tenant:
+  # Required. The realm id of the sign-in service from the first start (enrolment never renames it).
+  id: ""
+  # Display name of the tenant; defaults to tenant.id.
+  name: ""
+
+hive:
+  # Defaults to <tenant.id>-hive.
+  id: ""
+  name: ""
+
+owner:
+  # The Owner's sign-in email; defaults to owner@<console.baseDomain>.
+  email: ""
+
+console:
+  # Required. The console's host name.
+  host: ""
+  # own-domain (you publish DNS), hive-subdomain or relayed-hive-subdomain (published by the platform at enrolment).
+  address: own-domain
+  # The domain the realm sign-in service (idp-<tenant>.<baseDomain>) and the environments (<env>.<baseDomain>) are
+  # published under; defaults to console.host without its first label.
+  baseDomain: ""
+  # The HTTPS port browsers reach the ingress on.
+  port: 443
+  # The console's data claim (its working folder; records live in Postgres).
+  dataSize: 1Gi
+
+tls:
+  # secret: tls.secretName names a kubernetes.io/tls Secret in the install namespace covering the console, the sign-in
+  # service and *.<baseDomain>. self-signed: the bootstrap mints a development CA (Secret pragmatic-tls-dev-ca).
+  mode: secret
+  secretName: ""
+
+ingress:
+  # Empty: the cluster's default IngressClass.
+  className: ""
+  # The ingress controller's namespace: the only one that may reach the console's port.
+  namespace: ingress-nginx
+
+storage:
+  # Empty: the cluster's default StorageClass.
+  className: ""
+
+postgres:
+  size: 10Gi
+
+# The public key the console verifies signed releases against (default: the published release key).
+trustRoot:
+  publicKey: |
+    -----BEGIN PUBLIC KEY-----
+    MCowBQYDK2VwAyEAt4UFSruS/uj5bU6i9fQtc+mSG/4sqYXjPHGQgOMrock=
+    -----END PUBLIC KEY-----
+
+images:
+  # A mirror may replace the registry; repositories and digests are the release's (tools/chart-build.ts fills them).
+  registry: ghcr.io
+  apps:
+    pragmatic-hive-agent: { repository: pragmatic-tech-ai/pragmatic-hive-agent, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
+    pragmatic-tenant-admin: { repository: pragmatic-tech-ai/pragmatic-tenant-admin, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
+    pragmatic-tenant-idp: { repository: pragmatic-tech-ai/pragmatic-tenant-idp, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
+    pragmatic-postgres: { repository: pragmatic-tech-ai/pragmatic-postgres, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
+    pragmatic-env-server: { repository: pragmatic-tech-ai/pragmatic-env-server, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
+    pragmatic-env-gateway: { repository: pragmatic-tech-ai/pragmatic-env-gateway, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
+    pragmatic-ui-unpack: { repository: pragmatic-tech-ai/pragmatic-ui-unpack, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
+    pragmatic-platform-admin: { repository: pragmatic-tech-ai/pragmatic-platform-admin, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
+    pragmatic-platform-edge: { repository: pragmatic-tech-ai/pragmatic-platform-edge, digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
+
+agent:
+  # The platform's agent channel (level connected only).
+  channelUrl: https://agent.pragmatic-tech.ai
+
+preflight:
+  enabled: true
+
+resources:
+  console: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "1", memory: 1536Mi } }
+  idp: { requests: { cpu: 50m, memory: 128Mi }, limits: { cpu: 500m, memory: 512Mi } }
+  agent: { requests: { cpu: 20m, memory: 64Mi }, limits: { cpu: 200m, memory: 256Mi } }
+  postgres: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "1", memory: 1Gi } }
+  job: { requests: { cpu: 50m, memory: 128Mi }, limits: { cpu: 500m, memory: 512Mi } }

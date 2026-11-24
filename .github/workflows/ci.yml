@@ -57,6 +57,15 @@ jobs:
         run: |
           npm run typecheck
           npm test
+      # The chart's own checks (its render tests above run helm template; ubuntu-latest carries helm).
+      - name: Lint the engine chart
+        if: steps.token.outputs.present == 'true'
+        run: |
+          stage="$RUNNER_TEMP/engine-lint"
+          mkdir -p "$stage" && cp -r charts/pragmatic-engine "$stage/" && mkdir -p "$stage/pragmatic-engine/files/descriptors"
+          echo '{}' > "$stage/pragmatic-engine/files/descriptors/digests.json"
+          helm lint "$stage/pragmatic-engine" --namespace pragmatic-system --set tenant.id=acme --set console.host=console.acme.example --set tls.mode=self-signed \
+            $(for app in pragmatic-hive-agent pragmatic-tenant-admin pragmatic-tenant-idp pragmatic-postgres pragmatic-env-server pragmatic-env-gateway pragmatic-ui-unpack pragmatic-platform-admin pragmatic-platform-edge; do printf -- '--set images.apps.%s.digest=sha256:%s ' "$app" "$(printf '%s' "$app" | sha256sum | cut -d ' ' -f 1)"; done)
       - name: Check release.json
         if: steps.token.outputs.present == 'true'
         env:

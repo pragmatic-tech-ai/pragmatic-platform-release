@@ -1,0 +1,31 @@
+The Pragmatic management engine {{ .Chart.Version }} is installing ({{ .Values.level }}{{ if .Values.hosted }}, hosted{{ end }}).
+
+Console:            https://{{ .Values.console.host }}{{ include "engine.portSuffix" . }}
+Sign-in service:    {{ include "engine.idpBrowserUrl" . }}
+Environments under: <environment>.{{ include "engine.baseDomain" . }}
+
+Wait until every pod is ready:
+  kubectl get pods -n {{ include "engine.namespace" . }}
+  kubectl get pods -n {{ include "engine.idpName" . }}
+
+The Owner ({{ include "engine.ownerEmail" . }}) signs in once with this one-time password:
+  kubectl get secret pragmatic-owner-initial -n {{ include "engine.namespace" . }} -o jsonpath='{.data.password}' | base64 -d
+{{- if include "engine.selfSigned" . }}
+
+tls.mode=self-signed: trust the development CA in your browser to avoid certificate warnings:
+  kubectl get secret pragmatic-tls-dev-ca -n {{ include "engine.namespace" . }} -o jsonpath='{.data.ca\.crt}' | base64 -d > pragmatic-dev-ca.crt
+{{- end }}
+{{- if eq .Values.console.address "own-domain" }}
+
+DNS: point {{ .Values.console.host }}, {{ include "engine.idpHost" . }} and *.{{ include "engine.baseDomain" . }} at your ingress controller.
+{{- end }}
+{{- if not (include "engine.standalone" .) }}
+
+This hive is connected but not enrolled yet: the console's Connection status shows how to connect it.
+{{- else }}
+
+This engine runs standalone: it never contacts Pragmatic. Upgrade it with helm upgrade.
+{{- end }}
+
+Uninstalling keeps the database, the console data and every engine secret (helm.sh/resource-policy: keep): a reinstall
+finds them. A failed preflight says why in: kubectl logs -n {{ include "engine.namespace" . }} job/pragmatic-engine-preflight

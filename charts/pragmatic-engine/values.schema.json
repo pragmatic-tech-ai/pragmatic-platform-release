@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "pragmatic-engine values",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["level", "tenant", "console", "tls", "images"],
+  "definitions": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "digest"],
+      "properties": {
+        "repository": { "type": "string", "pattern": "^[a-z0-9]+([._/-][a-z0-9]+)*$" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "required": ["requests", "limits"],
+      "properties": {
+        "requests": { "type": "object", "required": ["cpu", "memory"] },
+        "limits": { "type": "object", "required": ["cpu", "memory"] }
+      }
+    }
+  },
+  "properties": {
+    "secrets": {
+      "description": "No value of this chart is a secret: every engine secret is minted inside the cluster by the bootstrap Job.",
+      "not": {}
+    },
+    "global": { "type": "object" },
+    "level": { "type": "string", "enum": ["connected", "standalone"] },
+    "hosted": { "type": "boolean" },
+    "tenant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$" },
+        "name": { "type": "string", "maxLength": 128 }
+      }
+    },
+    "hive": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^([a-z][a-z0-9-]{1,40}[a-z0-9])?$" },
+        "name": { "type": "string", "maxLength": 128 }
+      }
+    },
+    "owner": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "email": { "type": "string", "pattern": "^([^@\\s]+@[^@\\s]+\\.[^@\\s]+)?$" }
+      }
+    },
+    "console": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host"],
+      "properties": {
+        "host": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$" },
+        "address": { "type": "string", "enum": ["own-domain", "hive-subdomain", "relayed-hive-subdomain"] },
+        "baseDomain": { "type": "string", "pattern": "^([a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+)?$" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "dataSize": { "type": "string", "pattern": "^[0-9]+(Mi|Gi|Ti)$" }
+      }
+    },
+    "tls": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "type": "string", "enum": ["secret", "self-signed"] },
+        "secretName": { "type": "string", "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$" }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "className": { "type": "string" },
+        "namespace": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "className": { "type": "string" } }
+    },
+    "postgres": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "size": { "type": "string", "pattern": "^[0-9]+(Mi|Gi|Ti)$" } }
+    },
+    "trustRoot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["publicKey"],
+      "properties": { "publicKey": { "type": "string", "pattern": "^-----BEGIN PUBLIC KEY-----" } }
+    },
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry", "apps"],
+      "properties": {
+        "registry": { "type": "string", "pattern": "^[a-z0-9.-]+(:[0-9]+)?$" },
+        "apps": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pragmatic-hive-agent", "pragmatic-tenant-admin", "pragmatic-tenant-idp", "pragmatic-postgres", "pragmatic-env-server", "pragmatic-env-gateway", "pragmatic-ui-unpack", "pragmatic-platform-admin", "pragmatic-platform-edge"],
+          "properties": {
+            "pragmatic-hive-agent": { "$ref": "#/definitions/image" },
+            "pragmatic-tenant-admin": { "$ref": "#/definitions/image" },
+            "pragmatic-tenant-idp": { "$ref": "#/definitions/image" },
+            "pragmatic-postgres": { "$ref": "#/definitions/image" },
+            "pragmatic-env-server": { "$ref": "#/definitions/image" },
+            "pragmatic-env-gateway": { "$ref": "#/definitions/image" },
+            "pragmatic-ui-unpack": { "$ref": "#/definitions/image" },
+            "pragmatic-platform-admin": { "$ref": "#/definitions/image" },
+            "pragmatic-platform-edge": { "$ref": "#/definitions/image" }
+          }
+        }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "channelUrl": { "type": "string", "pattern": "^https://" } }
+    },
+    "preflight": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "enabled": { "type": "boolean" } }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "console": { "$ref": "#/definitions/resources" },
+        "idp": { "$ref": "#/definitions/resources" },
+        "agent": { "$ref": "#/definitions/resources" },
+        "postgres": { "$ref": "#/definitions/resources" },
+        "job": { "$ref": "#/definitions/resources" }
+      }
+    }
+  }
+}

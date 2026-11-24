@@ -13,14 +13,16 @@
     "node": ">=22.5"
   },
   "scripts": {
-    "test": "tsx --test \"tools/**/*.test.ts\"",
+    "test": "tsx --test \"tools/**/*.test.ts\" \"tests/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
     "verify": "tsx tools/bin/release-manifest.ts verify",
     "assemble:ci": "tsx tools/bin/release-manifest.ts ci",
-    "signing-key-readers": "tsx tools/bin/signing-key-readers.ts"
+    "signing-key-readers": "tsx tools/bin/signing-key-readers.ts",
+    "chart:build": "tsx tools/bin/chart-build.ts"
   },
   "dependencies": {
-    "@pragmatic-tech-ai/pragmatic-release-toolkit": "^0.18.12"
+    "@pragmatic-tech-ai/pragmatic-release-toolkit": "^0.18.15",
+    "yaml": "^2.6.0"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

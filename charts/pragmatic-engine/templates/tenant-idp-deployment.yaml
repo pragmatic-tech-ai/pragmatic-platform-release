@@ -1,0 +1,145 @@
+{{- $idpNs := include "engine.idpName" . }}
+{{- $name := include "engine.idpName" . }}
+{{- $tls := include "engine.consoleTlsSecret" . }}
+# The realm sign-in service in its own namespace (the bootstrap created it with its Secrets). It keeps no data on a claim:
+# its records live in the hive Postgres, its master and signing keys and its TLS in minted Secrets. Behind the ingress it
+# trusts the controller's forwarded client address, so its per-address throttles see each client.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ $idpNs }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $idpNs }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+    pragmatic/app: {{ $name }}
+    {{- include "engine.componentLabels" (dict "component" "pragmatic-tenant-idp" "container" "idp") | nindent 4 }}
+spec:
+  replicas: 1
+  # No claim: a surge roll keeps the sign-in service up while it updates.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  minReadySeconds: 10
+  selector:
+    matchLabels:
+      pragmatic/app: {{ $name }}
+  template:
+    metadata:
+      labels:
+        pragmatic/app: {{ $name }}
+        {{- include "engine.componentLabels" (dict "component" "pragmatic-tenant-idp" "container" "idp") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- include "engine.podSecurity" (dict "uid" 1000) | nindent 8 }}
+      containers:
+        - name: idp
+          image: {{ include "engine.image" (dict "root" . "app" "pragmatic-tenant-idp") }}
+          command: ["node", "dist/bin/pragmatic-idpd.js"]
+          terminationMessagePolicy: FallbackToLogsOnError
+          ports:
+            - name: https
+              containerPort: 9443
+          env:
+            - { name: PRAGMATIC_IDP_PORT, value: "9443" }
+            - { name: PRAGMATIC_IDP_BASE_URL, value: {{ include "engine.idpBrowserUrl" . | quote }} }
+            - { name: PRAGMATIC_IDP_INTERNAL_URL, value: {{ include "engine.idpInternalUrl" . | quote }} }
+            - { name: PRAGMATIC_IDP_HOST, value: 0.0.0.0 }
+            - { name: PRAGMATIC_IDP_DATA, value: /idp-data }
+            - { name: PRAGMATIC_IDP_ADMIN_TOKEN_REF, value: admin-token }
+            - { name: PRAGMATIC_IDP_DATABASE_URL_FILE, value: /run/secrets/pragmatic-tenant-idp-database/database-url }
+            - { name: PRAGMATIC_IDP_SECRETS_DIR, value: /run/secrets/pragmatic/pragmatic-tenant-idp }
+            - { name: PRAGMATIC_IDP_TRUSTED_PROXY, value: "true" }
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: https
+              scheme: HTTPS
+            periodSeconds: 10
+          securityContext:
+            {{- include "engine.containerSecurity" (dict "uid" 1000) | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources.idp | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /idp-data }
+            - { name: master-key, mountPath: /idp-data/master.key, subPath: master.key, readOnly: true }
+            - { name: signing-key, mountPath: /idp-data/signing-key.pem, subPath: signing-key.pem, readOnly: true }
+            - { name: tls, mountPath: /idp-data/tls, readOnly: true }
+            - { name: admin-token, mountPath: /idp-data/secrets, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+            - { name: database-url, mountPath: /run/secrets/pragmatic-tenant-idp-database, readOnly: true }
+            {{- include "engine.configurationMounts" (dict "short" "tenant-idp" "component" "pragmatic-tenant-idp") | nindent 12 }}
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: master-key
+          secret: { secretName: pragmatic-tenant-idp-master-key, defaultMode: 288 }
+        - name: signing-key
+          secret: { secretName: pragmatic-tenant-idp-signing-key, defaultMode: 288 }
+        - name: tls
+          secret: { secretName: pragmatic-tenant-idp-tls, defaultMode: 288 }
+        - name: admin-token
+          secret: { secretName: pragmatic-tenant-idp-admin-token, defaultMode: 288, items: [{ key: admin-token, path: admin-token }] }
+        - name: tmp
+          emptyDir: {}
+        - name: database-url
+          secret: { secretName: pragmatic-tenant-idp-database, defaultMode: 288, items: [{ key: database-url, path: database-url }] }
+        {{- include "engine.configurationVolumes" (dict "short" "tenant-idp" "component" "pragmatic-tenant-idp") | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $idpNs }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    pragmatic/app: {{ $name }}
+  ports:
+    - port: 9443
+      targetPort: https
+---
+# The controller terminates the browser's TLS with the console's certificate and re-encrypts to the sign-in service,
+# verifying its certificate (issued for the Service name) against the sign-in service's own CA.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  namespace: {{ $idpNs }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+    nginx.ingress.kubernetes.io/proxy-ssl-secret: {{ printf "%s/pragmatic-tenant-idp-tls" $idpNs | quote }}
+    nginx.ingress.kubernetes.io/proxy-ssl-verify: "on"
+    nginx.ingress.kubernetes.io/proxy-ssl-name: {{ include "engine.idpInternalHost" . | quote }}
+    nginx.ingress.kubernetes.io/proxy-ssl-server-name: "on"
+spec:
+  {{- include "engine.ingressClass" . | nindent 2 }}
+  tls:
+    - hosts: [{{ include "engine.idpHost" . | quote }}]
+      secretName: {{ $tls }}
+  rules:
+    - host: {{ include "engine.idpHost" . | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  number: 9443

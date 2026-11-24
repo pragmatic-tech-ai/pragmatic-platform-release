@@ -4,11 +4,14 @@
 # Both jobs check out the commit the tag named when the run started (github.sha), so publish signs what verify checked
 # even if the tag moves meanwhile. Job `verify` (no secret but PACKAGES_TOKEN): install with no install scripts, typecheck, tests, and
 # tools/bin/release-manifest.ts verify, which stops the run unless the tagged commit has a valid release.json naming the
-# tag's version. Job `publish` (environment `release`, the only holder of RELEASE_SIGNING_KEY):
+# tag's version. Job `chart` (packages: write, no signing key): tools/bin/chart-build.ts builds the release's
+# pragmatic-engine chart (release.json's image digests, the components' descriptors) and pushes it to
+# oci://ghcr.io/pragmatic-tech-ai/charts/pragmatic-engine:<version>, answering its digest. Job `publish` (environment
+# `release`, the only holder of RELEASE_SIGNING_KEY):
 # a production install (the toolkit's plain dist JS, no install scripts), then the toolkit's `pragmatic-release-publish
 # assemble` (every image at its digest and labelled with the digest of its repository's v<version> component.json, the
 # tag v<version> present, the image tag release-<version> free or the same digest, the version unpublished), then
-# `publish --manifest`: the schema-2 descriptor (the manifest's digests, the labelled component digests, each container
+# `publish --manifest --chart-digest`: the schema-3 descriptor (the chart's digest, the manifest's digests, the labelled component digests, each container
 # repository's tag commit as siblingCommits, this commit as serverCommit) signed with the key and checked against
 # release-keys/release-2026-11.pub.pem before any push, every image tagged release-<version>, the nine component.json
 # assets (the descriptors the images carry, read from the container releases as for assemble) pushed as
@@ -63,8 +66,44 @@ jobs:
       # not release/<the manifest version>.
       - name: Verify release.json against the tag
         run: npx --no-install tsx tools/bin/release-manifest.ts verify --manifest release.json --tag "$GITHUB_REF"
-  publish:
+  chart:
     needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Install
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Log helm in to GHCR
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
+        run: printf '%s' "$REGISTRY_TOKEN" | helm registry login ghcr.io --username "$REGISTRY_USER" --password-stdin
+      # The chart at the release's digests and descriptors, pushed before the descriptor that binds its digest is signed.
+      - name: Build and push the engine chart
+        id: build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          npx --no-install tsx tools/bin/chart-build.ts --manifest release.json --out "$RUNNER_TEMP/chart" --push | tee "$RUNNER_TEMP/chart.out"
+          grep '^digest=sha256:' "$RUNNER_TEMP/chart.out" >> "$GITHUB_OUTPUT"
+      - name: Log helm out
+        if: always()
+        run: helm registry logout ghcr.io || true
+  publish:
+    needs: [verify, chart]
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -104,7 +143,8 @@ jobs:
           RELEASE_REGISTRY_USER: ${{ github.actor }}
           RELEASE_REGISTRY_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
           GITHUB_TOKEN: ${{ github.token }}
-        run: npx --no-install pragmatic-release-publish publish --manifest release.json --key-id release-2026-11 --trust-dir release-keys
+          CHART_DIGEST: ${{ needs.chart.outputs.digest }}
+        run: npx --no-install pragmatic-release-publish publish --manifest release.json --key-id release-2026-11 --trust-dir release-keys --chart-digest "$CHART_DIGEST"
       - name: Remove the signing key
         if: always()
         run: rm -f "$RUNNER_TEMP/release.key"

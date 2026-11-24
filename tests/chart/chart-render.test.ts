@@ -1,0 +1,215 @@
+import assert from 'node:assert/strict'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, it } from 'node:test'
+import { ChartFixture, type K8sDoc } from './chart-fixture.js'
+
+/** The Secrets the console's bootstrap mints (pragmatic-tenant-admin EngineSecretSet), by namespace scope. */
+class MintedSecrets
+{
+    public static readonly Engine: readonly string[] = [
+        'pragmatic-postgres-superuser', 'pragmatic-postgres-app-tenant-admin', 'pragmatic-postgres-app-tenant-idp',
+        'pragmatic-tenant-admin-master-key', 'pragmatic-tenant-admin-fingerprint', 'pragmatic-tenant-admin-seed',
+        'pragmatic-tenant-idp-admin-token', 'pragmatic-owner-initial', 'pragmatic-tenant-idp-ca', 'pragmatic-console-tls',
+    ]
+    public static readonly Idp: readonly string[] = [
+        'pragmatic-tenant-idp-master-key', 'pragmatic-tenant-idp-signing-key', 'pragmatic-tenant-idp-tls',
+        'pragmatic-tenant-idp-admin-token', 'pragmatic-tenant-idp-database',
+    ]
+    /** The configuration stores the bootstrap creates when absent; the pods mount them optionally. */
+    public static readonly Optional: readonly string[] = ['pragmatic-secrets-pragmatic-tenant-admin', 'pragmatic-secrets-pragmatic-hive-agent', 'pragmatic-secrets-pragmatic-tenant-idp', 'pragmatic-hive-acme-hive-agent-token']
+}
+
+class RenderFixture
+{
+    public static readonly Connected = { 'tls.mode': 'self-signed' }
+    public static readonly Standalone = { 'tls.mode': 'self-signed', level: 'standalone' }
+    public static readonly Hosted = { 'tls.mode': 'self-signed', hosted: 'true' }
+    public static readonly HookAnnotation = 'helm.sh/hook'
+
+    public static Workloads(docs: readonly K8sDoc[]): string[]
+    {
+        return docs.filter(d => ['Deployment', 'StatefulSet'].includes(d.kind)).map(d => d.kind + '/' + d.metadata.name).sort()
+    }
+
+    public static Jobs(docs: readonly K8sDoc[]): string[]
+    {
+        return docs.filter(d => d.kind === 'Job').map(d => d.metadata.name + ':' + d.metadata.annotations?.[RenderFixture.HookAnnotation] + ':' + d.metadata.annotations?.['helm.sh/hook-weight']).sort()
+    }
+
+    /** Every Secret a pod mounts, by the namespace the pod runs in. */
+    public static MountedSecrets(docs: readonly K8sDoc[]): Array<{ namespace: string; name: string; optional: boolean }>
+    {
+        return docs.filter(d => ['Deployment', 'StatefulSet'].includes(d.kind)).flatMap(d => (d.spec.template.spec.volumes as any[]).flatMap(v =>
+        {
+            const sources = v.secret !== undefined ? [v.secret] : (v.projected?.sources ?? []).filter((s: any) => s.secret !== undefined).map((s: any) => ({ secretName: s.secret.name }))
+            return sources.map((s: any) => ({ namespace: d.metadata.namespace as string, name: s.secretName as string, optional: s.optional === true }))
+        }))
+    }
+
+    public static CheckGolden(name: string, text: string): void
+    {
+        const file = join(ChartFixture.Golden, name + '.yaml')
+        if (process.env.UPDATE_GOLDEN === '1')
+        {
+            mkdirSync(ChartFixture.Golden, { recursive: true })
+            writeFileSync(file, text)
+            return
+        }
+        assert.equal(text, readFileSync(file, 'utf8'), name + ': the render changed; rerun with UPDATE_GOLDEN=1 and review the golden diff')
+    }
+}
+
+describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
+{
+    it('renders the four workloads, two hook jobs and the configmaps for connected', () =>
+    {
+        const docs = ChartFixture.Render(RenderFixture.Connected)
+        assert.deepEqual(RenderFixture.Workloads(docs), [
+            'Deployment/pragmatic-hive-acme-hive-agent', 'Deployment/pragmatic-idp-acme', 'Deployment/pragmatic-tenant-admin-acme', 'StatefulSet/pragmatic-postgres',
+        ])
+        assert.deepEqual(RenderFixture.Jobs(docs), ['pragmatic-engine-bootstrap:pre-install,pre-upgrade:-10', 'pragmatic-engine-preflight:pre-install,pre-upgrade:-20'])
+        for (const name of ['pragmatic-engine-descriptors', 'pragmatic-engine-trust-root', 'pragmatic-engine-release', 'pragmatic-postgres-applications'])
+        {
+            assert.ok(ChartFixture.Find(docs, 'ConfigMap', name), name)
+        }
+        const descriptors = ChartFixture.Find(docs, 'ConfigMap', 'pragmatic-engine-descriptors')!
+        assert.ok('pragmatic-tenant-admin.json' in (descriptors.data ?? {}) && 'digests.json' in (descriptors.data ?? {}))
+        assert.equal(ChartFixture.Find(docs, 'ConfigMap', 'pragmatic-postgres-applications')?.data?.['applications.conf'],
+            'pragmatic-tenant-admin tenant_admin tenant_admin\npragmatic-tenant-idp tenant_idp tenant_idp\n')
+        const idp = ChartFixture.Find(docs, 'Deployment', 'pragmatic-idp-acme')!
+        assert.equal(idp.metadata.namespace, 'pragmatic-idp-acme')
+        const env = Object.fromEntries((idp.spec.template.spec.containers[0].env as any[]).map(e => [e.name, e.value]))
+        assert.equal(env.PRAGMATIC_IDP_BASE_URL, 'https://idp-acme.acme.example')
+        assert.equal(env.PRAGMATIC_IDP_TRUSTED_PROXY, 'true')
+        const console = ChartFixture.Find(docs, 'Deployment', 'pragmatic-tenant-admin-acme')!
+        assert.equal(console.spec.strategy.type, 'Recreate', 'one pod on a ReadWriteOnce claim')
+        const consoleEnv = Object.fromEntries((console.spec.template.spec.containers[0].env as any[]).map(e => [e.name, e.value]))
+        assert.equal(consoleEnv.PRAGMATIC_ENGINE_MODE, 'connected')
+        assert.equal(consoleEnv.PRAGMATIC_TENANT_ADMIN_TRUSTED_PROXY, 'true')
+        assert.match(consoleEnv.PRAGMATIC_TENANT_ADMIN_ENV_SERVER_IMAGE, /^ghcr\.io\/pragmatic-tech-ai\/pragmatic-env-server@sha256:[0-9a-f]{64}$/)
+    })
+
+    it('mounts only the Secrets the bootstrap mints, in their namespaces', () =>
+    {
+        for (const values of [RenderFixture.Connected, RenderFixture.Standalone])
+        {
+            for (const mount of RenderFixture.MountedSecrets(ChartFixture.Render(values)))
+            {
+                const minted = mount.namespace === 'pragmatic-system' ? MintedSecrets.Engine : MintedSecrets.Idp
+                assert.ok(minted.includes(mount.name) || (mount.optional && MintedSecrets.Optional.includes(mount.name)), mount.namespace + '/' + mount.name)
+            }
+        }
+    })
+
+    it('standalone renders no agent and contains no pragmatic-tech.ai host', () =>
+    {
+        const text = ChartFixture.Text(RenderFixture.Standalone)
+        const docs = ChartFixture.Render(RenderFixture.Standalone)
+        assert.deepEqual(RenderFixture.Workloads(docs), ['Deployment/pragmatic-idp-acme', 'Deployment/pragmatic-tenant-admin-acme', 'StatefulSet/pragmatic-postgres'])
+        assert.equal(docs.some(d => d.metadata.name.includes('hive-agent') || d.metadata.name.includes('agent-placer')), false)
+        assert.doesNotMatch(text, /https?:\/\/[^\s"']*pragmatic-tech\.ai/)
+        assert.doesNotMatch(text, /\bagent\.pragmatic-tech\.ai\b/)
+        const consoleEnv = (ChartFixture.Find(docs, 'Deployment', 'pragmatic-tenant-admin-acme')!.spec.template.spec.containers[0].env as any[])
+        assert.equal(consoleEnv.find(e => e.name === 'PRAGMATIC_ENGINE_MODE')?.value, 'standalone')
+        assert.equal(consoleEnv.some(e => e.name.startsWith('PRAGMATIC_TENANT_ADMIN_ROLLOUT')), false)
+    })
+
+    it('hosted binds the agent to cluster-admin, connected to the placer role', () =>
+    {
+        const hosted = ChartFixture.Render(RenderFixture.Hosted)
+        assert.equal(ChartFixture.Find(hosted, 'ClusterRoleBinding', 'pragmatic-hive-acme-hive-agent')?.roleRef.name, 'cluster-admin')
+        assert.equal(ChartFixture.Find(hosted, 'ClusterRole', 'pragmatic-hive-agent-placer'), undefined)
+        const connected = ChartFixture.Render(RenderFixture.Connected)
+        assert.equal(ChartFixture.Find(connected, 'ClusterRoleBinding', 'pragmatic-hive-acme-hive-agent')?.roleRef.name, 'pragmatic-hive-agent-placer')
+        const placer = ChartFixture.Find(connected, 'ClusterRole', 'pragmatic-hive-agent-placer')!
+        const granted = JSON.stringify(placer.rules)
+        for (const forbidden of ['secrets', 'pods/exec', 'pods/portforward', 'services/proxy'])
+        {
+            assert.equal(granted.includes(forbidden), false, forbidden)
+        }
+    })
+
+    it('every image is referenced by digest', () =>
+    {
+        for (const values of [RenderFixture.Connected, RenderFixture.Standalone])
+        {
+            const docs = ChartFixture.Render(values)
+            for (const pod of ChartFixture.Pods(docs))
+            {
+                for (const container of [...(pod.spec.initContainers ?? []), ...pod.spec.containers])
+                {
+                    assert.match(container.image, /^ghcr\.io\/pragmatic-tech-ai\/pragmatic-[a-z-]+@sha256:[0-9a-f]{64}$/, pod.owner + '/' + container.name)
+                }
+            }
+        }
+        const mirrored = ChartFixture.Render({ ...RenderFixture.Connected, 'images.registry': 'mirror.example.com:5000' })
+        assert.ok(ChartFixture.Pods(mirrored).every(p => p.spec.containers.every((c: any) => c.image.startsWith('mirror.example.com:5000/pragmatic-tech-ai/'))))
+    })
+
+    it('the schema refuses a missing tenant.id or console.host and any secrets.* value', () =>
+    {
+        assert.match(ChartFixture.Refusal({ 'tenant.id': '' }), /tenant\.id|tenant\/id|id/)
+        assert.match(ChartFixture.Refusal({ 'console.host': '' }), /host/)
+        assert.match(ChartFixture.Refusal({ 'secrets.ownerPassword': 'x' }), /secrets/)
+        assert.match(ChartFixture.Refusal({ 'tenant.id': 'Not_Valid' }), /tenant/)
+        assert.match(ChartFixture.Refusal({ level: 'enrolled' }), /level/)
+    })
+
+    it('refuses another namespace and a secret TLS mode without its Secret', () =>
+    {
+        assert.match(ChartFixture.Refusal(RenderFixture.Connected, 'default'), /namespace pragmatic-system/)
+        assert.match(ChartFixture.Refusal({}), /tls\.secretName/)
+        const own = ChartFixture.Render({ 'tls.secretName': 'acme-tls' })
+        assert.equal(ChartFixture.Find(own, 'Ingress', 'pragmatic-tenant-admin-acme')?.spec.tls[0].secretName, 'acme-tls')
+    })
+
+    it('postgres PVC and every minted secret carry helm.sh/resource-policy keep', () =>
+    {
+        const docs = ChartFixture.Render(RenderFixture.Connected)
+        const claims = docs.filter(d => d.kind === 'PersistentVolumeClaim')
+        assert.deepEqual(claims.map(c => c.metadata.name).sort(), ['pragmatic-postgres-data', 'pragmatic-tenant-admin-acme-data'])
+        for (const claim of claims)
+        {
+            assert.equal(claim.metadata.annotations?.['helm.sh/resource-policy'], 'keep', claim.metadata.name)
+        }
+        // The chart renders no Secret at all: every engine Secret is the bootstrap's (minted with keep, never chart-owned).
+        assert.equal(docs.some(d => d.kind === 'Secret'), false)
+    })
+
+    it('every pod is non-root, read-only root, RuntimeDefault seccomp, with limits', () =>
+    {
+        for (const values of [RenderFixture.Connected, RenderFixture.Hosted])
+        {
+            for (const pod of ChartFixture.Pods(ChartFixture.Render(values)))
+            {
+                assert.equal(pod.spec.securityContext.runAsNonRoot, true, pod.owner)
+                assert.equal(pod.spec.securityContext.seccompProfile.type, 'RuntimeDefault', pod.owner)
+                for (const container of [...(pod.spec.initContainers ?? []), ...pod.spec.containers])
+                {
+                    const at = pod.owner + '/' + container.name
+                    const security = container.securityContext
+                    assert.equal(security.runAsNonRoot, true, at)
+                    assert.equal(security.readOnlyRootFilesystem, true, at)
+                    assert.equal(security.allowPrivilegeEscalation, false, at)
+                    assert.deepEqual(security.capabilities.drop, ['ALL'], at)
+                    assert.equal(security.seccompProfile.type, 'RuntimeDefault', at)
+                    assert.ok(container.resources?.limits?.cpu && container.resources?.limits?.memory, at)
+                    assert.ok(container.resources?.requests?.cpu && container.resources?.requests?.memory, at)
+                }
+            }
+        }
+    })
+
+    it('refuses a chart without the release digests', () =>
+    {
+        assert.match(ChartFixture.Refusal({ ...RenderFixture.Connected, 'images.apps.pragmatic-postgres.digest': 'sha256:' + '0'.repeat(64) }), /no release digest/)
+    })
+
+    it('goldens for the three modes', () =>
+    {
+        RenderFixture.CheckGolden('connected', ChartFixture.Text(RenderFixture.Connected))
+        RenderFixture.CheckGolden('standalone', ChartFixture.Text(RenderFixture.Standalone))
+        RenderFixture.CheckGolden('hosted', ChartFixture.Text(RenderFixture.Hosted))
+    })
+})

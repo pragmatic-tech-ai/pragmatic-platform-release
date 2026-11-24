@@ -1,0 +1,27 @@
+{{- $ns := include "engine.namespace" . }}
+# The public key the console verifies signed releases against.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pragmatic-engine-trust-root
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+data:
+  trust-root.pub: {{ .Values.trustRoot.publicKey | quote }}
+---
+# The release's images the console may run in its environments (PinnedImageVerifier's allow-list), by digest.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pragmatic-engine-release
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+data:
+  {{- $images := list }}
+  {{- range $app := keys .Values.images.apps | sortAlpha }}
+  {{- $images = append $images (dict "imageRef" (include "engine.image" (dict "root" $ "app" $app))) }}
+  {{- end }}
+  verified-images.json: {{ toJson $images | quote }}
+  release: {{ .Chart.Version | quote }}

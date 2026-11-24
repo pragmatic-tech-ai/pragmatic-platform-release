@@ -1,0 +1,207 @@
+{{- $ns := include "engine.namespace" . }}
+{{- $name := include "engine.consoleName" . }}
+{{- $idpNs := include "engine.idpName" . }}
+{{- $hive := include "engine.hive" . }}
+{{- $envRole := printf "%s-env" $name }}
+{{- $tls := include "engine.consoleTlsSecret" . }}
+# The console's access, as the platform's console install grants it: it creates and deletes its own hive's environment
+# namespaces and binds its environment role inside them (fenced by the admission policy below), configures the engine's
+# components by name, and reads the TLS Secret it copies into environments.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "create", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["create"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    resourceNames: [{{ $envRole | quote }}]
+    verbs: ["bind"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $ns }}
+---
+# What the console may do inside an environment namespace (bound there per environment, never cluster-wide).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $envRole }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps", "services", "persistentvolumeclaims"]
+    verbs: ["*"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale", "statefulsets", "statefulsets/scale"]
+    verbs: ["*"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-configuration
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["pragmatic-config-pragmatic-hive-agent", "pragmatic-config-pragmatic-tenant-admin"]
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["pragmatic-secrets-pragmatic-hive-agent", "pragmatic-secrets-pragmatic-tenant-admin"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: [{{ include "engine.agentName" . | quote }}, {{ $name | quote }}]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-configuration
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}-configuration
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $ns }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-configuration
+  namespace: {{ $idpNs }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["pragmatic-config-pragmatic-tenant-idp"]
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["pragmatic-secrets-pragmatic-tenant-idp"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: [{{ $idpNs | quote }}]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-configuration
+  namespace: {{ $idpNs }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}-configuration
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $ns }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-tls
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ $tls | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-tls
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}-tls
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $ns }}
+---
+# The console's admission fence (TenantConsoleAdmission): only its own hive's environment namespaces, enforcing a Pod
+# Security level; only its own role binding of its own environment role to its own account; outside the environment
+# namespaces only a Deployment's configuration-hash and secrets-revision annotations.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConditions:
+    - name: console-service-account
+      expression: "request.userInfo.username == 'system:serviceaccount:{{ $ns }}:{{ $name }}'"
+  matchConstraints:
+    resourceRules:
+      - { apiGroups: [""], apiVersions: ["v1"], operations: ["CREATE", "UPDATE", "DELETE"], resources: ["namespaces"], scope: "*" }
+      - { apiGroups: ["rbac.authorization.k8s.io"], apiVersions: ["v1"], operations: ["CREATE", "UPDATE"], resources: ["rolebindings"], scope: "*" }
+      - { apiGroups: ["apps"], apiVersions: ["v1"], operations: ["UPDATE"], resources: ["deployments"], scope: "*" }
+  validations:
+    - expression: "request.resource.resource != 'namespaces' || request.operation != 'CREATE' || (object.metadata.name.startsWith('pragmatic-env-') && has(object.metadata.labels) && 'pragmatic/hive' in object.metadata.labels && object.metadata.labels['pragmatic/hive'] == '{{ $hive }}' && 'pod-security.kubernetes.io/enforce' in object.metadata.labels && object.metadata.labels['pod-security.kubernetes.io/enforce'] in ['baseline', 'restricted'])"
+      message: "The console may only create its own hive's environment namespaces, enforcing the baseline or restricted Pod Security level."
+    - expression: "request.resource.resource != 'namespaces' || request.operation == 'CREATE' || (oldObject.metadata.name.startsWith('pragmatic-env-') && has(oldObject.metadata.labels) && 'pragmatic/hive' in oldObject.metadata.labels && oldObject.metadata.labels['pragmatic/hive'] == '{{ $hive }}')"
+      message: "The console may only change or delete its own hive's environment namespaces."
+    - expression: "request.resource.resource != 'rolebindings' || (request.namespace.startsWith('pragmatic-env-') && has(namespaceObject.metadata.labels) && 'pragmatic/hive' in namespaceObject.metadata.labels && namespaceObject.metadata.labels['pragmatic/hive'] == '{{ $hive }}' && 'pod-security.kubernetes.io/enforce' in namespaceObject.metadata.labels && namespaceObject.metadata.labels['pod-security.kubernetes.io/enforce'] in ['baseline', 'restricted'])"
+      message: "The console may only bind roles inside its own hive's environment namespaces that enforce the baseline or restricted Pod Security level."
+    - expression: "request.resource.resource != 'rolebindings' || object.metadata.name == 'pragmatic-tenant-console'"
+      message: "The console may only create its own environment role binding."
+    - expression: "request.resource.resource != 'rolebindings' || (object.roleRef.apiGroup == 'rbac.authorization.k8s.io' && object.roleRef.kind == 'ClusterRole' && object.roleRef.name == '{{ $envRole }}')"
+      message: "The console may only bind its own environment ClusterRole."
+    - expression: "request.resource.resource != 'rolebindings' || (has(object.subjects) && size(object.subjects) == 1 && object.subjects[0].kind == 'ServiceAccount' && object.subjects[0].namespace == '{{ $ns }}' && object.subjects[0].name == '{{ $name }}')"
+      message: "The console may only bind its environment role to its own ServiceAccount."
+    - expression: "request.resource.resource != 'deployments' || request.namespace.startsWith('pragmatic-env-') || ((has(object.metadata.labels) == has(oldObject.metadata.labels) && (!has(object.metadata.labels) || object.metadata.labels == oldObject.metadata.labels)) && (has(object.metadata.annotations) == has(oldObject.metadata.annotations) && (!has(object.metadata.annotations) || object.metadata.annotations == oldObject.metadata.annotations)) && (has(object.metadata.ownerReferences) == has(oldObject.metadata.ownerReferences) && (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences == oldObject.metadata.ownerReferences)) && (has(object.metadata.finalizers) == has(oldObject.metadata.finalizers) && (!has(object.metadata.finalizers) || object.metadata.finalizers == oldObject.metadata.finalizers)) && (has(object.spec.template.metadata.labels) == has(oldObject.spec.template.metadata.labels) && (!has(object.spec.template.metadata.labels) || object.spec.template.metadata.labels == oldObject.spec.template.metadata.labels)) && (has(object.spec.template.metadata.name) == has(oldObject.spec.template.metadata.name) && (!has(object.spec.template.metadata.name) || object.spec.template.metadata.name == oldObject.spec.template.metadata.name)) && (has(object.spec.template.metadata.namespace) == has(oldObject.spec.template.metadata.namespace) && (!has(object.spec.template.metadata.namespace) || object.spec.template.metadata.namespace == oldObject.spec.template.metadata.namespace)) && (has(object.spec.template.metadata.generateName) == has(oldObject.spec.template.metadata.generateName) && (!has(object.spec.template.metadata.generateName) || object.spec.template.metadata.generateName == oldObject.spec.template.metadata.generateName)) && (has(object.spec.template.metadata.ownerReferences) == has(oldObject.spec.template.metadata.ownerReferences) && (!has(object.spec.template.metadata.ownerReferences) || object.spec.template.metadata.ownerReferences == oldObject.spec.template.metadata.ownerReferences)) && (has(object.spec.template.metadata.finalizers) == has(oldObject.spec.template.metadata.finalizers) && (!has(object.spec.template.metadata.finalizers) || object.spec.template.metadata.finalizers == oldObject.spec.template.metadata.finalizers)) && (has(object.spec.template.spec) == has(oldObject.spec.template.spec) && (!has(object.spec.template.spec) || object.spec.template.spec == oldObject.spec.template.spec)) && (has(object.spec.replicas) == has(oldObject.spec.replicas) && (!has(object.spec.replicas) || object.spec.replicas == oldObject.spec.replicas)) && (has(object.spec.selector) == has(oldObject.spec.selector) && (!has(object.spec.selector) || object.spec.selector == oldObject.spec.selector)) && (has(object.spec.strategy) == has(oldObject.spec.strategy) && (!has(object.spec.strategy) || object.spec.strategy == oldObject.spec.strategy)) && (has(object.spec.minReadySeconds) == has(oldObject.spec.minReadySeconds) && (!has(object.spec.minReadySeconds) || object.spec.minReadySeconds == oldObject.spec.minReadySeconds)) && (has(object.spec.revisionHistoryLimit) == has(oldObject.spec.revisionHistoryLimit) && (!has(object.spec.revisionHistoryLimit) || object.spec.revisionHistoryLimit == oldObject.spec.revisionHistoryLimit)) && (has(object.spec.progressDeadlineSeconds) == has(oldObject.spec.progressDeadlineSeconds) && (!has(object.spec.progressDeadlineSeconds) || object.spec.progressDeadlineSeconds == oldObject.spec.progressDeadlineSeconds)) && (has(object.spec.paused) == has(oldObject.spec.paused) && (!has(object.spec.paused) || object.spec.paused == oldObject.spec.paused)) && (!has(object.spec.template.metadata.annotations) || object.spec.template.metadata.annotations.all(k, k == 'pragmatic-tech.ai/configuration-hash' || k == 'pragmatic-tech.ai/secrets-revision' || (has(oldObject.spec.template.metadata.annotations) && k in oldObject.spec.template.metadata.annotations && oldObject.spec.template.metadata.annotations[k] == object.spec.template.metadata.annotations[k]))) && (!has(oldObject.spec.template.metadata.annotations) || oldObject.spec.template.metadata.annotations.all(k, k == 'pragmatic-tech.ai/configuration-hash' || k == 'pragmatic-tech.ai/secrets-revision' || (has(object.spec.template.metadata.annotations) && k in object.spec.template.metadata.annotations && object.spec.template.metadata.annotations[k] == oldObject.spec.template.metadata.annotations[k]))))"
+      message: "Outside its environment namespaces the console may only change a Deployment's configuration-hash annotation."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+spec:
+  policyName: {{ $name }}
+  validationActions: ["Deny"]

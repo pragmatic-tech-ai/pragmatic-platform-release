@@ -1,0 +1,14 @@
+apiVersion: v2
+name: pragmatic-engine
+description: >-
+  The Pragmatic management engine for one hive: the hive agent, the tenant admin console, the realm sign-in service and one
+  pragmatic-postgres, pinned by image digest to one platform release. Preflight checks run before anything is created and
+  every engine secret is minted inside the cluster; no value of this chart is a secret.
+type: application
+# Set to the platform release version by tools/chart-build.ts (helm package --version).
+version: 0.0.0
+appVersion: "0.0.0"
+kubeVersion: ">=1.29.0-0"
+home: https://pragmatic-tech.ai
+sources:
+  - https://github.com/pragmatic-tech-ai/pragmatic-platform-release

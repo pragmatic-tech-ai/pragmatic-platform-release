@@ -1,0 +1,17 @@
+{{- $descriptors := .Files.Glob "files/descriptors/*.json" }}
+{{- if not $descriptors }}
+{{- fail "the chart carries no release descriptors (files/descriptors): install a published release of the chart" }}
+{{- end }}
+# The release's component descriptors (and digests.json), baked in by tools/chart-build.ts from the components' release
+# assets: the console validates every component's configuration against them.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pragmatic-engine-descriptors
+  namespace: {{ include "engine.namespace" . }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+data:
+  {{- range $path, $_ := $descriptors }}
+  {{ base $path }}: {{ $.Files.Get $path | quote }}
+  {{- end }}

@@ -1,0 +1,223 @@
+{{- $ns := include "engine.namespace" . }}
+{{- $name := include "engine.consoleName" . }}
+{{- $tls := include "engine.consoleTlsSecret" . }}
+# The tenant admin console: its data claim (kept), account, Deployment, Service, Ingress and the NetworkPolicy that lets
+# only the ingress controller reach it (it trusts the controller's forwarded client address).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-data
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+  annotations:
+    {{- include "engine.keep" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- include "engine.storageClass" . | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ .Values.console.dataSize }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+automountServiceAccountToken: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+    pragmatic/app: {{ $name }}
+    {{- include "engine.componentLabels" (dict "component" "pragmatic-tenant-admin" "container" "tenant-admin") | nindent 4 }}
+spec:
+  replicas: 1
+  # Recreate: one pod on a ReadWriteOnce data claim (a surge would start the new pod before the old one lets it go).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      pragmatic/app: {{ $name }}
+  template:
+    metadata:
+      labels:
+        pragmatic/app: {{ $name }}
+        {{- include "engine.componentLabels" (dict "component" "pragmatic-tenant-admin" "container" "tenant-admin") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $name }}
+      enableServiceLinks: false
+      securityContext:
+        {{- include "engine.podSecurity" (dict "uid" 10001) | nindent 8 }}
+      initContainers:
+        # The directory seed, master key, trust root and the release's image allow-list into the data folder.
+        - name: seed
+          image: {{ include "engine.image" (dict "root" . "app" "pragmatic-tenant-admin") }}
+          command: ["sh", "-c", "cp -f --no-preserve=mode /seed/* /data/"]
+          securityContext:
+            {{- include "engine.containerSecurity" (dict "uid" 10001) | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources.job | nindent 12 }}
+          volumeMounts:
+            - name: seed
+              mountPath: /seed
+              readOnly: true
+            - name: data
+              mountPath: /data
+      containers:
+        - name: tenant-admin
+          image: {{ include "engine.image" (dict "root" . "app" "pragmatic-tenant-admin") }}
+          terminationMessagePolicy: FallbackToLogsOnError
+          ports:
+            - name: http
+              containerPort: 7100
+          env:
+            - { name: PRAGMATIC_TENANT_ADMIN_DATA_ROOT, value: /data }
+            - { name: PRAGMATIC_TENANT_ADMIN_PORT, value: "7100" }
+            - { name: PRAGMATIC_TENANT_ADMIN_BIND, value: 0.0.0.0 }
+            - { name: PRAGMATIC_TENANT_ADMIN_BASE_DOMAIN, value: {{ include "engine.baseDomain" . | quote }} }
+            - { name: PRAGMATIC_TENANT_ADMIN_EXTERNAL_SCHEME, value: https }
+            {{- if ne (int .Values.console.port) 443 }}
+            - { name: PRAGMATIC_TENANT_ADMIN_EXTERNAL_PORT, value: {{ .Values.console.port | quote }} }
+            {{- end }}
+            - { name: PRAGMATIC_TENANT_ADMIN_SECURE_COOKIE, value: "true" }
+            - { name: PRAGMATIC_TENANT_ADMIN_TRUSTED_PROXY, value: "true" }
+            - { name: PRAGMATIC_TENANT_ADMIN_DEPLOYMENT, value: {{ $name | quote }} }
+            - { name: PRAGMATIC_TENANT_ADMIN_CONSOLE_HOST, value: {{ .Values.console.host | quote }} }
+            - { name: PRAGMATIC_IDP_BROWSER_BASE_URL, value: {{ include "engine.idpBrowserUrl" . | quote }} }
+            - { name: PRAGMATIC_IDP_BASE_URL, value: {{ include "engine.idpInternalUrl" . | quote }} }
+            - { name: PRAGMATIC_IDP_CA_FILE, value: /idp/ca/ca.crt }
+            - { name: PRAGMATIC_IDP_ADMIN_TOKEN_FILE, value: /idp/token/admin-token }
+            - { name: PRAGMATIC_TENANT_ADMIN_INGRESS_TLS_SOURCE, value: existing-secret }
+            - { name: PRAGMATIC_TENANT_ADMIN_INGRESS_TLS_SECRET, value: {{ $tls | quote }} }
+            - { name: PRAGMATIC_TENANT_ADMIN_FINGERPRINT_KEY_FILE, value: /fingerprint/fingerprint.key }
+            - { name: PRAGMATIC_TENANT_ADMIN_DATABASE_URL_FILE, value: /run/secrets/tenant-admin-database/database-url }
+            - { name: PRAGMATIC_ENGINE_MODE, value: {{ .Values.level | quote }} }
+            - { name: PRAGMATIC_TENANT_ADMIN_HIVE_POSTGRES_URL_FILE, value: /run/secrets/hive-postgres/database-url }
+            - { name: PRAGMATIC_TENANT_ADMIN_ENV_SERVER_IMAGE, value: {{ include "engine.image" (dict "root" . "app" "pragmatic-env-server") | quote }} }
+            - { name: PRAGMATIC_TENANT_ADMIN_UI_UNPACK_IMAGE, value: {{ include "engine.image" (dict "root" . "app" "pragmatic-ui-unpack") | quote }} }
+            - { name: PRAGMATIC_TENANT_ADMIN_OWNER_INITIAL_DIR, value: /run/secrets/pragmatic-owner-initial }
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          securityContext:
+            {{- include "engine.containerSecurity" (dict "uid" 10001) | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources.console | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: tmp, mountPath: /tmp }
+            - { name: idp-ca, mountPath: /idp/ca, readOnly: true }
+            - { name: idp-token, mountPath: /idp/token, readOnly: true }
+            - { name: fingerprint, mountPath: /fingerprint, readOnly: true }
+            - { name: database-url, mountPath: /run/secrets/tenant-admin-database, readOnly: true }
+            - { name: hive-postgres, mountPath: /run/secrets/hive-postgres, readOnly: true }
+            - { name: owner-initial, mountPath: /run/secrets/pragmatic-owner-initial, readOnly: true }
+            - { name: release-descriptors, mountPath: /etc/pragmatic/descriptors, readOnly: true }
+            {{- include "engine.configurationMounts" (dict "short" "tenant-admin" "component" "pragmatic-tenant-admin") | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $name }}-data
+        - name: tmp
+          emptyDir: {}
+        - name: seed
+          projected:
+            defaultMode: 288
+            sources:
+              - secret:
+                  name: pragmatic-tenant-admin-seed
+                  items: [{ key: seed.json, path: seed.json }]
+              - secret:
+                  name: pragmatic-tenant-admin-master-key
+                  items: [{ key: master.key, path: master.key }]
+              - configMap:
+                  name: pragmatic-engine-trust-root
+                  items: [{ key: trust-root.pub, path: trust-root.pub }]
+              - configMap:
+                  name: pragmatic-engine-release
+                  items: [{ key: verified-images.json, path: verified-images.json }]
+        # Only the public CA certificate of the sign-in service, never its key.
+        - name: idp-ca
+          secret: { secretName: pragmatic-tenant-idp-ca, defaultMode: 288, items: [{ key: ca.crt, path: ca.crt }] }
+        - name: idp-token
+          secret: { secretName: pragmatic-tenant-idp-admin-token, defaultMode: 288, items: [{ key: admin-token, path: admin-token }] }
+        - name: fingerprint
+          secret: { secretName: pragmatic-tenant-admin-fingerprint, defaultMode: 288, items: [{ key: fingerprint.key, path: fingerprint.key }] }
+        - name: database-url
+          secret: { secretName: pragmatic-postgres-app-tenant-admin, defaultMode: 288, items: [{ key: database-url, path: database-url }] }
+        - name: hive-postgres
+          secret: { secretName: pragmatic-postgres-superuser, defaultMode: 288, items: [{ key: database-url, path: database-url }] }
+        - name: owner-initial
+          secret: { secretName: pragmatic-owner-initial, defaultMode: 288, items: [{ key: email, path: email }, { key: password, path: password }] }
+        - name: release-descriptors
+          configMap: { name: pragmatic-engine-descriptors }
+        {{- include "engine.configurationVolumes" (dict "short" "tenant-admin" "component" "pragmatic-tenant-admin") | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    pragmatic/app: {{ $name }}
+  ports:
+    - port: 7100
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+spec:
+  {{- include "engine.ingressClass" . | nindent 2 }}
+  tls:
+    - hosts: [{{ .Values.console.host | quote }}]
+      secretName: {{ $tls }}
+  rules:
+    - host: {{ .Values.console.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  number: 7100
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      pragmatic/app: {{ $name }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.ingress.namespace }}
+      ports:
+        - protocol: TCP
+          port: 7100

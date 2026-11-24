@@ -1,0 +1,98 @@
+{{- if not (include "engine.standalone" .) }}
+{{- $ns := include "engine.namespace" . }}
+{{- $name := include "engine.agentName" . }}
+# The hive agent (level connected): idle until the hive is enrolled (C3.3 writes its token), then it polls the platform's
+# agent channel. Hosted hives (set by the host agent) bind it to cluster-admin; otherwise it gets the placer role, which
+# grants no read of Secrets, no pods/exec, pods/portforward or services/proxy.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+---
+{{- if not .Values.hosted }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pragmatic-hive-agent-placer
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "patch"]
+---
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ if .Values.hosted }}cluster-admin{{ else }}pragmatic-hive-agent-placer{{ end }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $ns }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "engine.hiveLabels" . | nindent 4 }}
+    pragmatic/app: {{ $name }}
+    {{- include "engine.componentLabels" (dict "component" "pragmatic-hive-agent" "container" "agent") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  minReadySeconds: 10
+  selector:
+    matchLabels:
+      pragmatic/app: {{ $name }}
+  template:
+    metadata:
+      labels:
+        pragmatic/app: {{ $name }}
+        {{- include "engine.componentLabels" (dict "component" "pragmatic-hive-agent" "container" "agent") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $name }}
+      enableServiceLinks: false
+      securityContext:
+        {{- include "engine.podSecurity" (dict "uid" 10001) | nindent 8 }}
+      containers:
+        - name: agent
+          image: {{ include "engine.image" (dict "root" . "app" "pragmatic-hive-agent") }}
+          terminationMessagePolicy: FallbackToLogsOnError
+          env:
+            - { name: PRAGMATIC_AGENT_REGISTRY_URL, value: {{ .Values.agent.channelUrl | quote }} }
+            - { name: PRAGMATIC_AGENT_HIVE_ID, value: {{ include "engine.hive" . | quote }} }
+            - { name: PRAGMATIC_AGENT_TOKEN_FILE, value: /run/secrets/pragmatic-agent-token/token }
+          readinessProbe:
+            exec:
+              command: ["test", "-f", "/tmp/pragmatic-ready"]
+            periodSeconds: 2
+          securityContext:
+            {{- include "engine.containerSecurity" (dict "uid" 10001) | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources.agent | nindent 12 }}
+          volumeMounts:
+            - { name: agent-token, mountPath: /run/secrets/pragmatic-agent-token, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+            {{- include "engine.configurationMounts" (dict "short" "hive-agent" "component" "pragmatic-hive-agent") | nindent 12 }}
+      volumes:
+        # Absent until enrolment (C3.3) writes it; the agent waits idle until the token file appears.
+        - name: agent-token
+          secret: { secretName: {{ include "engine.agentTokenSecret" . }}, optional: true, defaultMode: 288, items: [{ key: token, path: token }] }
+        - name: tmp
+          emptyDir: {}
+        {{- include "engine.configurationVolumes" (dict "short" "hive-agent" "component" "pragmatic-hive-agent") | nindent 8 }}
+{{- end }}

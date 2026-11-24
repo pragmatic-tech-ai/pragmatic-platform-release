@@ -1,0 +1,132 @@
+{{- $ns := include "engine.namespace" . }}
+{{- $idpNs := include "engine.idpName" . }}
+{{- $tls := include "engine.consoleTlsSecret" . }}
+# Bootstrap (pre-install, pre-upgrade; after the preflight): the console image creates the realm sign-in service's
+# namespace and mints every absent engine Secret inside the cluster (never replacing one), so this chart's values stay
+# secret-free. Its account may create Secrets and ConfigMaps and read or update only the engine's own Secrets by name.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pragmatic-engine-bootstrap
+  namespace: {{ $ns }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-15"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pragmatic-engine-bootstrap
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-15"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    resourceNames: [{{ $idpNs | quote }}]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["create"]
+  # Read (a copy's source, a kept certificate) and update (a copy) only the engine's own Secrets.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - pragmatic-postgres-app-tenant-idp
+      - pragmatic-tenant-idp-admin-token
+      - pragmatic-tenant-idp-tls
+      - pragmatic-tenant-idp-ca
+      - pragmatic-tenant-idp-database
+      - pragmatic-tls-dev-ca
+      - {{ $tls | quote }}
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pragmatic-engine-bootstrap
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-15"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pragmatic-engine-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: pragmatic-engine-bootstrap
+    namespace: {{ $ns }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pragmatic-engine-bootstrap
+  namespace: {{ $ns }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pragmatic-engine-bootstrap
+    spec:
+      serviceAccountName: pragmatic-engine-bootstrap
+      restartPolicy: Never
+      securityContext:
+        {{- include "engine.podSecurity" (dict "uid" 10001) | nindent 8 }}
+      containers:
+        - name: bootstrap
+          image: {{ include "engine.image" (dict "root" . "app" "pragmatic-tenant-admin") }}
+          command: ["node", "dist/bin/pragmatic-tenant-admind.js", "bootstrap"]
+          terminationMessagePolicy: FallbackToLogsOnError
+          env:
+            - name: PRAGMATIC_BOOTSTRAP_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: PRAGMATIC_BOOTSTRAP_IDP_NAMESPACE
+              value: {{ $idpNs | quote }}
+            - name: PRAGMATIC_BOOTSTRAP_TENANT_ID
+              value: {{ include "engine.tenant" . | quote }}
+            - name: PRAGMATIC_BOOTSTRAP_TENANT_NAME
+              value: {{ include "engine.tenantName" . | quote }}
+            - name: PRAGMATIC_BOOTSTRAP_HIVE_ID
+              value: {{ include "engine.hive" . | quote }}
+            - name: PRAGMATIC_BOOTSTRAP_HIVE_LABEL
+              value: {{ include "engine.hiveName" . | quote }}
+            - name: PRAGMATIC_BOOTSTRAP_CONSOLE_HOST
+              value: {{ .Values.console.host | quote }}
+            - name: PRAGMATIC_BOOTSTRAP_BASE_DOMAIN
+              value: {{ include "engine.baseDomain" . | quote }}
+            - name: PRAGMATIC_BOOTSTRAP_IDP_HOST
+              value: {{ include "engine.idpHost" . | quote }}
+            - name: PRAGMATIC_BOOTSTRAP_IDP_INTERNAL_HOST
+              value: {{ include "engine.idpInternalHost" . | quote }}
+            - name: PRAGMATIC_BOOTSTRAP_POSTGRES_HOST
+              value: {{ include "engine.postgresHost" . | quote }}
+            - name: PRAGMATIC_BOOTSTRAP_TLS_MODE
+              value: {{ .Values.tls.mode | quote }}
+            - name: PRAGMATIC_BOOTSTRAP_TLS_SECRET
+              value: {{ if include "engine.selfSigned" . }}""{{ else }}{{ $tls | quote }}{{ end }}
+            - name: PRAGMATIC_BOOTSTRAP_OWNER_EMAIL
+              value: {{ include "engine.ownerEmail" . | quote }}
+          securityContext:
+            {{- include "engine.containerSecurity" (dict "uid" 10001) | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.resources.job | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
