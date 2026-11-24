@@ -100,10 +100,11 @@ rules:
     resourceNames: [{{ include "engine.agentName" . | quote }}, {{ $name | quote }}]
     verbs: ["get", "patch"]
   {{- if not .Values.hosted }}
-  # The ingress-certificate rotation intent (C3.4): the console renews its TLS Secret (and the dev CA of a self-signed engine).
+  # The ingress-certificate rotation intent (C3.4): the console renews its TLS Secret, signed by the dev CA of a self-signed
+  # engine (its key in its own Secret, read by the console only).
   - apiGroups: [""]
     resources: ["secrets"]
-    resourceNames: ["pragmatic-console-tls", "pragmatic-tls-dev-ca"]
+    resourceNames: ["pragmatic-console-tls", "pragmatic-tls-dev-ca", "pragmatic-tls-dev-ca-key"]
     verbs: ["get", "update", "patch"]
   {{- end }}
   {{- end }}

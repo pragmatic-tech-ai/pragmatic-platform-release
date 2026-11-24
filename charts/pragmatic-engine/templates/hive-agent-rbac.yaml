@@ -5,8 +5,8 @@
 # What the connected agent may do for its enrolment and reports (C3.3), and nothing more: create Secrets (its identity
 # Secret, once) and read or update only pragmatic-hive-identity; read, create and update only the enrolment and kept-intents
 # ConfigMaps (C3.4);
-# read the engine's own workloads; create TokenReviews (the console's bearer on its internal API); list Deployments for
-# the environments it reports. Never a read of any other Secret.
+# read the engine's own workloads by name; create TokenReviews (the console's bearer on its internal API). Its report's
+# environments come from the console (C3.4: no cluster-wide list). Never a read of any other Secret.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -92,7 +92,7 @@ subjects:
     name: {{ $name }}
     namespace: {{ $ns }}
 ---
-# TokenReviews (the console's bearer) and the environments' Deployments (read-only), cluster-scoped.
+# TokenReviews (the console's bearer), cluster-scoped. Nothing else is cluster-wide but the placer's four workloads by name.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -103,9 +103,6 @@ rules:
   - apiGroups: ["authentication.k8s.io"]
     resources: ["tokenreviews"]
     verbs: ["create"]
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

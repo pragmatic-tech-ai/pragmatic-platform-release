@@ -250,15 +250,16 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
 
         // Admitted: an image-only move of each engine workload by digest, and a restart annotation.
         assert.deepEqual(policy.Denials(update(console, moved(console, 'ghcr.io/pragmatic-tech-ai/pragmatic-tenant-admin' + digest))), [])
-        assert.deepEqual(policy.Denials(update(agent, moved(agent, 'registry.pragmatic-tech.ai/pragmatic-tech-ai/pragmatic-hive-agent' + digest))), [])
+        assert.deepEqual(policy.Denials(update(agent, moved(agent, 'ghcr.io/pragmatic-tech-ai/pragmatic-hive-agent' + digest))), [])
+        assert.ok((policy.Denials(update(agent, moved(agent, 'registry.pragmatic-tech.ai/pragmatic-tech-ai/pragmatic-hive-agent' + digest))) ?? []).length > 0, 'another registry for the same image: its repository is pinned')
         assert.deepEqual(policy.Denials(update(postgres, moved(postgres, 'ghcr.io/pragmatic-tech-ai/pragmatic-postgres' + digest), 'statefulsets')), [])
         assert.deepEqual(policy.Denials(update(agent, AgentPolicy.Changed(agent, copy => { copy.spec.template.metadata.annotations = { 'kubectl.kubernetes.io/restartedAt': '2026-11-25T00:00:00Z' } }))), [])
 
         // Images: a tag (also in an init container), another registry, another organisation.
         const taggedInit = AgentPolicy.Changed(console, copy => { copy.spec.template.spec.initContainers[0].image = 'ghcr.io/pragmatic-tech-ai/pragmatic-tenant-admin:0.1.13' })
-        assert.equal(policy.Denials(update(console, taggedInit))?.length, 1)
-        assert.equal(policy.Denials(update(agent, moved(agent, 'docker.io/pragmatic-tech-ai/pragmatic-hive-agent' + digest)))?.length, 1)
-        assert.equal(policy.Denials(update(agent, moved(agent, 'ghcr.io/someone-else/pragmatic-hive-agent' + digest)))?.length, 1)
+        assert.ok((policy.Denials(update(console, taggedInit)) ?? []).length > 0)
+        assert.ok((policy.Denials(update(agent, moved(agent, 'docker.io/pragmatic-tech-ai/pragmatic-hive-agent' + digest))) ?? []).length > 0)
+        assert.ok((policy.Denials(update(agent, moved(agent, 'ghcr.io/someone-else/pragmatic-hive-agent' + digest))) ?? []).length > 0)
 
         // "Look by placing": a shell command, an env from a Secret, another Secret mounted, another account, hostPath,
         // privileged, host network, added capabilities.
@@ -312,6 +313,31 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
         const secret = { ...own, kind: 'Secret', metadata: { ...own.metadata, name: 'pragmatic-owner-initial' } }
         assert.ok((policy.Denials({ Operation: 'UPDATE', Group: '', Resource: 'secrets', Namespace: 'pragmatic-system', Object: secret, OldObject: secret }) ?? []).length > 0, 'another Secret')
 
+        // Round three: other kinds, a dropped container, an init-container field, a template label or annotation, a scale,
+        // another repository, a service-account-token Secret.
+        const pod = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'pragmatic-hive-acme-hive-agent', namespace: 'pragmatic-system', labels: agent.metadata.labels }, spec: agent.spec.template.spec }
+        assert.ok((policy.Denials({ Operation: 'CREATE', Group: '', Resource: 'pods', Namespace: 'pragmatic-system', Object: pod, OldObject: null }) ?? []).length > 0, 'a bare Pod')
+        const job = { apiVersion: 'batch/v1', kind: 'Job', metadata: { name: 'pragmatic-hive-acme-hive-agent', namespace: 'pragmatic-system', labels: agent.metadata.labels }, spec: { template: agent.spec.template } }
+        assert.ok((policy.Denials({ Operation: 'CREATE', Group: 'batch', Resource: 'jobs', Namespace: 'pragmatic-system', Object: job, OldObject: null }) ?? []).length > 0, 'a Job')
+        const replicaSet = AgentPolicy.Changed(agent, copy => { copy.kind = 'ReplicaSet' })
+        assert.ok((policy.Denials({ Operation: 'UPDATE', Group: 'apps', Resource: 'replicasets', Namespace: 'pragmatic-system', Object: replicaSet, OldObject: replicaSet }) ?? []).length > 0, 'a ReplicaSet')
+        const twoContainers = AgentPolicy.Changed(console, copy => { copy.spec.template.spec.containers.push({ ...copy.spec.template.spec.containers[0], name: 'second' }) })
+        assert.ok((policy.Denials(update(twoContainers, AgentPolicy.Changed(twoContainers, copy => { copy.spec.template.spec.containers.pop() }))) ?? []).length > 0, 'a dropped container')
+        assert.ok((policy.Denials(update(console, AgentPolicy.Changed(console, copy => { copy.spec.template.spec.initContainers[0].command = ['sh', '-c', 'id'] }))) ?? []).length > 0, 'an init-container field')
+        assert.ok((policy.Denials(update(agent, AgentPolicy.Changed(agent, copy => { copy.spec.template.metadata.labels['app.kubernetes.io/component'] = 'pragmatic-tenant-admin' }))) ?? []).length > 0, 'an added template label')
+        assert.ok((policy.Denials(update(agent, AgentPolicy.Changed(agent, copy => { copy.spec.template.metadata.annotations = { 'container.apparmor.security.beta.kubernetes.io/agent': 'unconfined' } }))) ?? []).length > 0, 'a template annotation')
+        assert.ok((policy.Denials(update(agent, AgentPolicy.Changed(agent, copy => { copy.spec.replicas = 0 }))) ?? []).length > 0, 'a scaled replica count')
+        assert.ok((policy.Denials(update(agent, AgentPolicy.Changed(agent, copy => { copy.spec.strategy = { type: 'Recreate' } }))) ?? []).length > 0, 'a changed strategy')
+        assert.ok((policy.Denials(update(agent, moved(agent, 'ghcr.io/pragmatic-tech-ai/pragmatic-tenant-admin' + digest))) ?? []).length > 0, 'another release repository')
+        const identity = (type: string, annotations?: Record<string, string>): AdmissionCase => ({
+            Operation: 'CREATE', Group: '', Resource: 'secrets', Namespace: 'pragmatic-system', OldObject: null,
+            Object: { apiVersion: 'v1', kind: 'Secret', type, metadata: { name: 'pragmatic-hive-identity', namespace: 'pragmatic-system', labels: { 'app.kubernetes.io/managed-by': 'pragmatic-hive-agent' }, ...(annotations === undefined ? {} : { annotations }) } },
+        })
+        assert.deepEqual(policy.Denials(identity('Opaque')), [])
+        assert.ok((policy.Denials(identity('kubernetes.io/service-account-token', { 'kubernetes.io/service-account.name': 'pragmatic-tenant-admin-acme' })) ?? []).length > 0, 'a service-account-token Secret')
+        assert.ok((policy.Denials(identity('Opaque', { 'kubernetes.io/service-account.name': 'pragmatic-tenant-admin-acme' })) ?? []).length > 0, 'the service-account annotation')
+        assert.ok((policy.Denials({ ...identity('Opaque'), Object: { ...identity('Opaque').Object, metadata: { ...identity('Opaque').Object.metadata, name: 'pragmatic-tls-dev-ca-key' } } }) ?? []).length > 0, 'the dev CA key')
+
         // Anyone else is not this policy's.
         assert.equal(policy.Denials({ ...update(agent, moved(agent, 'docker.io/x/y:1')), Username: 'system:serviceaccount:pragmatic-system:pragmatic-tenant-admin-acme' }), null)
 
@@ -337,6 +363,8 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
         assert.match(String(consoleEnv.get('PRAGMATIC_ENGINE_VERSION')), /^\d+\.\d+\.\d+/, 'the engine version an environment intent may name')
         const configuration = ChartFixture.Find(docs, 'Role', 'pragmatic-tenant-admin-acme-configuration')!
         assert.ok((configuration.rules as any[]).some(rule => rule.resources.includes('secrets') && JSON.stringify(rule.resourceNames) === JSON.stringify(['pragmatic-console-tls', 'pragmatic-tls-dev-ca'])
+            && JSON.stringify(rule.verbs) === JSON.stringify(['get', 'update', 'patch'])) === false, 'the old two-name rule is gone')
+        assert.ok((configuration.rules as any[]).some(rule => rule.resources.includes('secrets') && JSON.stringify(rule.resourceNames) === JSON.stringify(['pragmatic-console-tls', 'pragmatic-tls-dev-ca', 'pragmatic-tls-dev-ca-key'])
             && JSON.stringify(rule.verbs) === JSON.stringify(['get', 'update', 'patch'])), 'the ingress-certificate renewal')
         const consoleRole = ChartFixture.Find(docs, 'ClusterRole', 'pragmatic-tenant-admin-acme')!
         assert.ok((consoleRole.rules as any[]).some(rule => rule.resources.includes('tokenreviews') && JSON.stringify(rule.verbs) === JSON.stringify(['create'])))
@@ -509,8 +537,24 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
         const reporter = ChartFixture.Find(docs, 'ClusterRole', 'pragmatic-hive-agent-reporter')!
         assert.deepEqual(reporter.rules, [
             { apiGroups: ['authentication.k8s.io'], resources: ['tokenreviews'], verbs: ['create'] },
-            { apiGroups: ['apps'], resources: ['deployments'], verbs: ['list'] },
-        ])
+        ], 'no cluster-wide list: the report\'s environments come from the console')
+        const cluster = docs.filter(d => d.kind === 'ClusterRole' && bound.some(binding => binding.roleRef.kind === 'ClusterRole' && binding.roleRef.name === d.metadata.name))
+        for (const role of cluster)
+        {
+            for (const rule of role.rules as any[])
+            {
+                assert.ok(!(rule.verbs as string[]).some(verb => verb === 'list' || verb === 'watch' || verb === '*'), role.metadata.name + ' lists or watches nothing')
+            }
+        }
+        const all = JSON.stringify(roles.map(role => role.rules))
+        assert.equal(all.includes('pragmatic-tls-dev-ca-key'), false, 'nothing on the dev CA key')
+    })
+
+    it('the bootstrap enforces the restricted Pod Security level on the engine\'s two namespaces', () =>
+    {
+        const docs = ChartFixture.Render(RenderFixture.Connected)
+        const role = ChartFixture.Find(docs, 'ClusterRole', 'pragmatic-engine-namespace')!
+        assert.ok((role.rules as any[]).some(rule => JSON.stringify(rule.resourceNames) === JSON.stringify(['pragmatic-idp-acme', 'pragmatic-system']) && JSON.stringify(rule.verbs) === JSON.stringify(['get', 'patch'])))
     })
 
     it('only the console reaches the agent\'s internal port', () =>

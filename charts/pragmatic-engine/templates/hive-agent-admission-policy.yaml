@@ -3,8 +3,13 @@
 {{- $name := include "engine.agentName" . }}
 {{- $idp := include "engine.idpName" . }}
 {{- $console := include "engine.consoleName" . }}
-{{- $podFields := list "volumes" "serviceAccountName" "serviceAccount" "automountServiceAccountToken" "hostNetwork" "hostPID" "hostIPC" "hostUsers" "securityContext" "nodeName" "nodeSelector" "hostAliases" "shareProcessNamespace" "runtimeClassName" "dnsPolicy" "dnsConfig" "affinity" "tolerations" "priorityClassName" "enableServiceLinks" "imagePullSecrets" "overhead" "os" "schedulingGates" "resourceClaims" "readinessGates" "subdomain" "hostname" "setHostnameAsFQDN" "preemptionPolicy" "topologySpreadConstraints" "terminationGracePeriodSeconds" "activeDeadlineSeconds" "restartPolicy" "schedulerName" }}
-{{- $containerFields := list "command" "args" "workingDir" "ports" "envFrom" "env" "resources" "resizePolicy" "volumeMounts" "volumeDevices" "livenessProbe" "readinessProbe" "startupProbe" "lifecycle" "securityContext" "stdin" "stdinOnce" "tty" "imagePullPolicy" "terminationMessagePath" "terminationMessagePolicy" "restartPolicy" }}
+{{- /* Every field of the PodSpec, Container, DeploymentSpec and StatefulSetSpec schemas (Kubernetes 1.34) except the images:
+       a CEL expression cannot drop one field of an object, so the comparison names them. A policy's object is typed dynamically
+       (the schema only warns), so a field this server does not have reads absent on both sides. */}}
+{{- $podFields := list "volumes" "serviceAccountName" "serviceAccount" "automountServiceAccountToken" "hostNetwork" "hostPID" "hostIPC" "hostUsers" "securityContext" "nodeName" "nodeSelector" "hostAliases" "shareProcessNamespace" "runtimeClassName" "dnsPolicy" "dnsConfig" "affinity" "tolerations" "priorityClassName" "priority" "enableServiceLinks" "imagePullSecrets" "overhead" "os" "schedulingGates" "resourceClaims" "readinessGates" "subdomain" "hostname" "setHostnameAsFQDN" "preemptionPolicy" "topologySpreadConstraints" "terminationGracePeriodSeconds" "activeDeadlineSeconds" "restartPolicy" "schedulerName" "ephemeralContainers" "resources" "hostnameOverride" }}
+{{- $containerFields := list "command" "args" "workingDir" "ports" "envFrom" "env" "resources" "resizePolicy" "volumeMounts" "volumeDevices" "livenessProbe" "readinessProbe" "startupProbe" "lifecycle" "securityContext" "stdin" "stdinOnce" "tty" "imagePullPolicy" "terminationMessagePath" "terminationMessagePolicy" "restartPolicy" "restartPolicyRules" }}
+{{- $deploymentFields := list "replicas" "selector" "strategy" "minReadySeconds" "revisionHistoryLimit" "progressDeadlineSeconds" "paused" }}
+{{- $statefulSetFields := list "replicas" "selector" "serviceName" "podManagementPolicy" "updateStrategy" "revisionHistoryLimit" "minReadySeconds" "volumeClaimTemplates" "persistentVolumeClaimRetentionPolicy" "ordinals" }}
 # The hive agent's admission fence (C3.4, "place, never look", enforced in the cluster, not promised), on the agent's
 # service account only. It may change exactly two kinds of object:
 #   - its own Secret, ConfigMaps and Lease in this namespace (by name, labelled managed-by pragmatic-hive-agent);
@@ -54,6 +59,10 @@ spec:
         !variables.own || (request.operation != 'DELETE' && has(object.metadata.labels) && 'app.kubernetes.io/managed-by' in object.metadata.labels
         && object.metadata.labels['app.kubernetes.io/managed-by'] == 'pragmatic-hive-agent')
       message: "The hive agent's own objects carry managed-by pragmatic-hive-agent and are never deleted by it."
+    - expression: >-
+        !variables.own || request.resource.resource != 'secrets' || request.operation == 'DELETE'
+        || (has(object.type) && object.type == 'Opaque' && (!has(object.metadata.annotations) || !('kubernetes.io/service-account.name' in object.metadata.annotations)))
+      message: "The hive agent's own Secret is Opaque: never a service-account token."
     - expression: "!variables.workload || request.operation == 'UPDATE'"
       message: "The hive agent never creates or deletes a workload: it only moves the engine's own."
     - expression: >-
@@ -66,12 +75,25 @@ spec:
     - expression: >-
         !variables.workload || request.operation != 'UPDATE' || ({{- range $i, $f := $podFields }}{{ if $i }} && {{ end }}{{ include "engine.celSame" (dict "a" "object.spec.template.spec" "b" "oldObject.spec.template.spec" "f" $f) }}{{- end }})
       message: "The hive agent may only change a workload's images: its pod's volumes, service account and security stay as they were."
+    - expression: >-
+        !variables.workload || request.operation != 'UPDATE' || (request.resource.resource == 'deployments'
+        ? ({{- range $i, $f := $deploymentFields }}{{ if $i }} && {{ end }}{{ include "engine.celSame" (dict "a" "object.spec" "b" "oldObject.spec" "f" $f) }}{{- end }})
+        : ({{- range $i, $f := $statefulSetFields }}{{ if $i }} && {{ end }}{{ include "engine.celSame" (dict "a" "object.spec" "b" "oldObject.spec" "f" $f) }}{{- end }}))
+      message: "The hive agent may not scale or restructure a workload: everything outside its pod template stays as it was."
+    - expression: >-
+        !variables.workload || request.operation != 'UPDATE' || ({{ include "engine.celSame" (dict "a" "object.spec.template.metadata" "b" "oldObject.spec.template.metadata" "f" "labels") }}
+        && {{ include "engine.celSame" (dict "a" "object.spec.template.metadata" "b" "oldObject.spec.template.metadata" "f" "name") }}
+        && (!has(object.spec.template.metadata.annotations) || object.spec.template.metadata.annotations.all(k, k == 'kubectl.kubernetes.io/restartedAt'
+            || (has(oldObject.spec.template.metadata.annotations) && k in oldObject.spec.template.metadata.annotations && oldObject.spec.template.metadata.annotations[k] == object.spec.template.metadata.annotations[k])))
+        && (!has(oldObject.spec.template.metadata.annotations) || oldObject.spec.template.metadata.annotations.all(k, k == 'kubectl.kubernetes.io/restartedAt'
+            || (has(object.spec.template.metadata.annotations) && k in object.spec.template.metadata.annotations && object.spec.template.metadata.annotations[k] == oldObject.spec.template.metadata.annotations[k]))))
+      message: "The hive agent may not change a pod's labels or annotations (a restart's timestamp aside)."
     {{- range $list := list "containers" "initContainers" }}
     - expression: >-
         !variables.workload || request.operation != 'UPDATE' || (has(object.spec.template.spec.{{ $list }}) == has(oldObject.spec.template.spec.{{ $list }})
         && (!has(object.spec.template.spec.{{ $list }}) || (size(object.spec.template.spec.{{ $list }}) == size(oldObject.spec.template.spec.{{ $list }})
-        && object.spec.template.spec.{{ $list }}.all(c, oldObject.spec.template.spec.{{ $list }}.exists(o, o.name == c.name{{- range $f := $containerFields }} && {{ include "engine.celSame" (dict "a" "c" "b" "o" "f" $f) }}{{- end }})))))
-      message: "The hive agent may only change a container's image: its command, arguments, environment, mounts and security stay as they were."
+        && object.spec.template.spec.{{ $list }}.all(c, oldObject.spec.template.spec.{{ $list }}.exists(o, o.name == c.name && o.image.indexOf('@') > 0 && c.image.indexOf('@') > 0 && c.image.substring(0, c.image.indexOf('@')) == o.image.substring(0, o.image.indexOf('@')){{- range $f := $containerFields }} && {{ include "engine.celSame" (dict "a" "c" "b" "o" "f" $f) }}{{- end }})))))
+      message: "The hive agent may only change a container's image digest: its repository, command, arguments, environment, mounts and security stay as they were."
     {{- end }}
     - expression: >-
         !variables.workload || request.operation != 'UPDATE' || ((!has(object.spec.template.spec.volumes) || object.spec.template.spec.volumes.all(v, !has(v.hostPath)))

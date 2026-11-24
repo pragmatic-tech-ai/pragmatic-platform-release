@@ -1073,6 +1073,11 @@ rules:
     resources: ["namespaces"]
     resourceNames: ["pragmatic-idp-acme"]
     verbs: ["get"]
+  # The engine's two namespaces enforce the restricted Pod Security level (enforce and enforce-version labels).
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    resourceNames: ["pragmatic-idp-acme", "pragmatic-system"]
+    verbs: ["get", "patch"]
 ---
 # Source: pragmatic-engine/templates/bootstrap-job.yaml
 # The bootstrap reads only that the sign-in service's namespace exists (the namespace step made it).
