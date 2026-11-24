@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseAllDocuments } from 'yaml'
-import { ReleaseApps, ReleaseManifest, type ReleaseManifestDocument } from '@pragmatic-tech-ai/pragmatic-release-toolkit'
+import { ReleaseManifest, type ReleaseManifestDocument } from '@pragmatic-tech-ai/pragmatic-release-toolkit'
 import { ChartBuild } from '../../tools/chart-build.js'
 
 export type K8sDoc = { apiVersion: string; kind: string; metadata: { name: string; namespace?: string; labels?: Record<string, string>; annotations?: Record<string, string> }; spec?: any; data?: Record<string, string>; rules?: any[]; roleRef?: any; subjects?: any[] }
@@ -44,7 +44,7 @@ export class ChartFixture
         ChartBuild.WriteImages(join(chart, ChartBuild.ImagesFile), ChartFixture.Manifest())
         const descriptors = join(chart, ChartBuild.DescriptorsDir)
         mkdirSync(descriptors, { recursive: true })
-        for (const app of ReleaseApps.All)
+        for (const app of ChartBuild.ChartApps)
         {
             writeFileSync(join(descriptors, app + '.json'), JSON.stringify({ component: app, schema: 1 }))
         }

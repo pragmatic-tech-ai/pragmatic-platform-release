@@ -12,16 +12,16 @@
 # a production install (the toolkit's plain dist JS, no install scripts), then the toolkit's `pragmatic-release-publish
 # assemble` (every image at its digest and labelled with the digest of its repository's v<version> component.json, the
 # tag v<version> present, the image tag release-<version> free or the same digest, the version unpublished), then
-# `publish --manifest --chart-digest`: the schema-3 descriptor (the chart's digest, the manifest's digests, the labelled component digests, each container
+# `publish --manifest --chart-digest`: the schema-4 descriptor (schema 3 plus the host agent image) (the chart's digest, the manifest's digests, the labelled component digests, each container
 # repository's tag commit as siblingCommits, this commit as serverCommit) signed with the key and checked against
-# release-keys/release-2026-11.pub.pem before any push, every image tagged release-<version>, the nine component.json
+# release-keys/release-2026-11.pub.pem before any push, every image tagged release-<version>, the ten component.json
 # assets (the descriptors the images carry, read from the container releases as for assemble) pushed as
 # pragmatic-release:components-<version> (one layer per app; consoles validate configurations against them, checked
 # against the signed component digests), and the descriptor pushed last as
 # ghcr.io/pragmatic-tech-ai/pragmatic-release:<version> (a stopped publish is re-run as is).
-# Registry: the nine image packages and pragmatic-release are public, so reads need no grant; writes (the release-<version>
+# Registry: the ten image packages and pragmatic-release are public, so reads need no grant; writes (the release-<version>
 # tags, the descriptor) go to packages created by pragmatic-server and linked to it, so this repository's GITHUB_TOKEN
-# gets 403 until each of the ten packages grants pragmatic-platform-release Actions access with the Write role (package
+# gets 403 until each of the eleven packages grants pragmatic-platform-release Actions access with the Write role (package
 # settings, "Manage Actions access"). GHCR_TOKEN (optional secret, write:packages) overrides the token for the publish
 # step; without it the run uses its own GITHUB_TOKEN (username: the actor either way). The GitHub releases and tags of
 # the container repositories (public) are read with GITHUB_TOKEN.

@@ -85,7 +85,7 @@ describe('ChartBuild', () =>
             assert.deepEqual(result, { Version: '0.1.0-early.16', Digest: RecordingHelm.PushedDigest, Package: join(out, 'pragmatic-engine-0.1.0-early.16.tgz') })
             const staged = join(out, 'pragmatic-engine')
             const images = JSON.parse(readFileSync(join(staged, 'files', 'images.json'), 'utf8'))
-            for (const app of ReleaseApps.All)
+            for (const app of ChartBuild.ChartApps)
             {
                 assert.deepEqual(images[app], { repository: manifest.components[app].repository, digest: manifest.components[app].digest }, app)
                 assert.ok(existsSync(join(staged, 'files', 'descriptors', app + '.json')), app)
@@ -95,6 +95,21 @@ describe('ChartBuild', () =>
             assert.equal(digests['pragmatic-tenant-admin'], 'sha256:' + createHash('sha256').update(asset).digest('hex'))
             assert.deepEqual(helm.Pushed, [result.Package + ' -> ghcr.io/pragmatic-tech-ai/charts'])
             assert.deepEqual(helm.Packaged, [{ chartDir: staged, version: '0.1.0-early.16' }])
+        })
+    })
+
+    it('leaves the host agent out of the chart images and descriptors', async () =>
+    {
+        await BuildFixture.InTemp(async out =>
+        {
+            await new ChartBuild(new FixtureAssets(), new RecordingHelm()).Run(BuildFixture.Manifest(), out)
+            const staged = join(out, 'pragmatic-engine')
+            const images = JSON.parse(readFileSync(join(staged, 'files', 'images.json'), 'utf8'))
+            assert.deepEqual(Object.keys(images).sort(), [...ReleaseApps.Schema2Apps].sort())
+            assert.equal(images[ReleaseApp.HostAgent], undefined)
+            assert.equal(existsSync(join(staged, 'files', 'descriptors', ReleaseApp.HostAgent + '.json')), false)
+            const digests = JSON.parse(readFileSync(join(staged, 'files', 'descriptors', 'digests.json'), 'utf8'))
+            assert.equal(digests[ReleaseApp.HostAgent], undefined)
         })
     })
 

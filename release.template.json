@@ -10,6 +10,7 @@
     "pragmatic-tenant-admin": { "repository": "pragmatic-tech-ai/pragmatic-tenant-admin", "version": "0.1.0", "digest": "sha256:<digest.txt of the v0.1.0 release>" },
     "pragmatic-tenant-idp": { "repository": "pragmatic-tech-ai/pragmatic-tenant-idp", "version": "0.1.0", "digest": "sha256:<digest.txt of the v0.1.0 release>" },
     "pragmatic-ui-unpack": { "repository": "pragmatic-tech-ai/pragmatic-ui-unpack", "version": "0.1.0", "digest": "sha256:<digest.txt of the v0.1.0 release>" },
-    "pragmatic-postgres": { "repository": "pragmatic-tech-ai/pragmatic-postgres", "version": "0.1.0", "digest": "sha256:<digest.txt of the v0.1.0 release>" }
+    "pragmatic-postgres": { "repository": "pragmatic-tech-ai/pragmatic-postgres", "version": "0.1.0", "digest": "sha256:<digest.txt of the v0.1.0 release>" },
+    "pragmatic-host-agent": { "repository": "pragmatic-tech-ai/pragmatic-host-agent", "version": "0.1.0", "digest": "sha256:<digest.txt of the v0.1.0 release>" }
   }
 }

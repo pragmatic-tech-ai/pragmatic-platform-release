@@ -218,8 +218,10 @@ export class PublishedRelease
         const S = PublishedRelease
         const repo = ReleaseRegistry.RepositoryPath(this.namespace, ReleasePublisher.DescriptorRepository)
         const { layer } = await this.registry.PullArtifactLayer(repo, doc.version)
-        const images = new Map(ReleaseDescriptorCodec.ImagesOf(ReleaseDescriptorCodec.Decode(layer)))
-        for (const app of ReleaseApps.All)
+        const descriptor = ReleaseDescriptorCodec.Decode(layer)
+        const images = new Map(ReleaseDescriptorCodec.ImagesOf(descriptor))
+        // A release published before the host agent (schema 3) carries nine images: compare what it carries.
+        for (const app of ReleaseDescriptorCodec.AppsOf(descriptor.schema))
         {
             if (images.get(app)?.digest !== doc.components[app].digest)
             {

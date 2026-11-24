@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { GitHubComponentAssetSource, ReleaseApps, ReleaseManifest, type IComponentAssetSource, type ReleaseManifestDocument } from '@pragmatic-tech-ai/pragmatic-release-toolkit'
+import { GitHubComponentAssetSource, ReleaseApps, ReleaseManifest, type IComponentAssetSource, type ReleaseApp, type ReleaseManifestDocument } from '@pragmatic-tech-ai/pragmatic-release-toolkit'
 import { PublishedRelease } from './release-manifest.js'
 
 /** The helm CLI calls the build makes (the real CLI; a recorder in tests). */
@@ -87,6 +87,11 @@ export class ChartBuildError extends Error
 export class ChartBuild
 {
     public static readonly ChartName = 'pragmatic-engine'
+    /**
+     * The images and descriptors a chart carries: the engine's (a hive's), every app of a schema-2/3 release. The host
+     * agent (schema 4, C5.1) runs on our hosting machines, never in a hive, so the chart leaves it out.
+     */
+    public static readonly ChartApps: readonly ReleaseApp[] = ReleaseApps.Schema2Apps
     public static readonly DefaultChartDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'charts', ChartBuild.ChartName)
     public static readonly DescriptorsDir = join('files', 'descriptors')
     public static readonly DigestsFile = 'digests.json'
@@ -147,7 +152,7 @@ export class ChartBuild
     {
         const C = ChartBuild
         const images: Record<string, { repository: string; digest: string }> = {}
-        for (const app of ReleaseApps.All)
+        for (const app of C.ChartApps)
         {
             const component = (manifest.components as Partial<ReleaseManifestDocument['components']>)[app]
             if (component === undefined || !C.DigestPattern.test(component.digest))
@@ -166,7 +171,7 @@ export class ChartBuild
         const C = ChartBuild
         mkdirSync(dir, { recursive: true })
         const digests: Record<string, string> = {}
-        for (const app of ReleaseApps.All)
+        for (const app of C.ChartApps)
         {
             const component = manifest.components[app]
             const asset = await this.assets.ComponentAsset(component.repository, component.version)

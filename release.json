@@ -10,6 +10,7 @@
     "pragmatic-tenant-admin": { "repository": "pragmatic-tech-ai/pragmatic-tenant-admin", "version": "0.1.12", "digest": "sha256:0c434cc9e0d9feff553e7b0cb63285b17764fd3b4d566865904dbf118211839e" },
     "pragmatic-tenant-idp": { "repository": "pragmatic-tech-ai/pragmatic-tenant-idp", "version": "0.2.8", "digest": "sha256:ce33355222d41d916988ae51793905bf127828cc0693a7f89bb6419a18d1d9d6" },
     "pragmatic-ui-unpack": { "repository": "pragmatic-tech-ai/pragmatic-ui-unpack", "version": "0.1.2", "digest": "sha256:8a06aa270136cea20a54e5332289754b004ae0b859fbfba9955828016d5eadfa" },
-    "pragmatic-postgres": { "repository": "pragmatic-tech-ai/pragmatic-postgres", "version": "0.1.0", "digest": "sha256:9a1583a99b16c912280112c049f37449729d94a50a90ad02790d96bd86b6d59d" }
+    "pragmatic-postgres": { "repository": "pragmatic-tech-ai/pragmatic-postgres", "version": "0.1.0", "digest": "sha256:9a1583a99b16c912280112c049f37449729d94a50a90ad02790d96bd86b6d59d" },
+    "pragmatic-host-agent": { "repository": "pragmatic-tech-ai/pragmatic-host-agent", "version": "0.1.0", "digest": "sha256:62909d2544b89744eadb614904f6143d6eb520b003be484454e0bbd9e6094a9e" }
   }
 }

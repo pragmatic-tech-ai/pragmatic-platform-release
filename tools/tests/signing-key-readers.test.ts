@@ -187,9 +187,9 @@ describe('SigningKeyReadersCli', () =>
         assert.deepEqual(fixture.Out, [])
     })
 
-    it('by default checks the nine container repositories, pragmatic-e2e and pragmatic-shared', () =>
+    it('by default checks the ten container repositories, pragmatic-e2e and pragmatic-shared', () =>
     {
-        assert.equal(SigningKeyReadersCli.DefaultRepos.length, 11)
+        assert.equal(SigningKeyReadersCli.DefaultRepos.length, 12)
         assert.ok(SigningKeyReadersCli.DefaultRepos.includes(F.E2e))
         assert.ok(SigningKeyReadersCli.DefaultRepos.includes(F.Shared))
         assert.ok(!SigningKeyReadersCli.DefaultRepos.includes('pragmatic-platform-release'))

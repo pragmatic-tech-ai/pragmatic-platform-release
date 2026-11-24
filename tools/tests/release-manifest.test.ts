@@ -11,6 +11,7 @@ import {
     OciRegistryClient,
     ReleaseApp,
     ReleaseApps,
+    type ReleaseDescriptorSchema,
     ReleaseDescriptorCodec,
     ReleaseManifest,
     ReleaseManifestDigestError,
@@ -68,6 +69,8 @@ class FakeRegistry
     private static readonly ConfigType = 'application/vnd.oci.image.config.v1+json'
     private static readonly LayerType = 'application/vnd.pragmatic.release.v1+json'
     private static readonly Commit = 'c'.repeat(40)
+    private static readonly FirstChartSchema = 3
+    private static readonly ChartDigest = 'sha256:' + 'd'.repeat(64)
     private static readonly BuiltAt = '2026-11-21T10:00:00.000Z'
     private static readonly KeyId = 'release-2026-11'
     private static readonly MethodHead = 'HEAD'
@@ -82,11 +85,11 @@ class FakeRegistry
     private readonly manifests = new Map<string, Uint8Array>()
     private readonly blobs = new Map<string, Uint8Array>()
 
-    public constructor(version: string | undefined, digests?: ReadonlyMap<ReleaseApp, string>, private readonly unreachable: boolean = false)
+    public constructor(version: string | undefined, digests?: ReadonlyMap<ReleaseApp, string>, private readonly unreachable: boolean = false, schema: ReleaseDescriptorSchema = ReleaseDescriptorCodec.CurrentSchema)
     {
         if (version !== undefined && digests !== undefined)
         {
-            const layer = FakeRegistry.Descriptor(version, digests)
+            const layer = FakeRegistry.Descriptor(version, digests, schema)
             this.PutManifest(FakeRegistry.DescriptorRepo, [version], { layers: [this.Blob(FakeRegistry.DescriptorRepo, layer, FakeRegistry.LayerType)], annotations: {} })
         }
     }
@@ -145,19 +148,19 @@ class FakeRegistry
         return digest
     }
 
-    /** A schema-2 descriptor of `version` naming `digests`, signed with a throwaway key (Decode checks the shape only). */
-    private static Descriptor(version: string, digests: ReadonlyMap<ReleaseApp, string>): Uint8Array
+    /** A descriptor of `schema` and `version` naming `digests` (the apps that schema carries), signed with a throwaway key (Decode checks the shape only). */
+    private static Descriptor(version: string, digests: ReadonlyMap<ReleaseApp, string>, schema: ReleaseDescriptorSchema): Uint8Array
     {
         const S = FakeRegistry
         const key = generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
         const images: Record<string, unknown> = {}
-        for (const app of ReleaseApps.All)
+        for (const app of ReleaseDescriptorCodec.AppsOf(schema))
         {
             const digest = digests.get(app) as string
             images[app] = { repository: PlatformReleaseManifest.RepositoryOf(app), digest, signature: ReleaseSignature.Sign(digest, key), componentDigest: digest }
         }
         const descriptor = {
-            schema: ReleaseDescriptorCodec.CurrentSchema,
+            schema,
             version,
             channel: Channel.EarlyAccess,
             serverCommit: S.Commit,
@@ -165,6 +168,7 @@ class FakeRegistry
             builtAt: S.BuiltAt,
             signingKeyId: S.KeyId,
             images,
+            ...(schema >= S.FirstChartSchema ? { chart: { reference: ReleaseDescriptorCodec.ChartReference, version, digest: S.ChartDigest } } : {}),
         } as unknown as ReleaseDescriptor
         return ReleaseDescriptorCodec.Encode(descriptor)
     }
@@ -178,6 +182,8 @@ class ManifestFixture
     public static readonly Committed = join(ManifestFixture.Root, PlatformReleaseManifest.FileName)
     public static readonly Organisation = 'pragmatic-tech-ai'
     public static readonly PathSeparator = '/'
+    public static readonly Schema3: ReleaseDescriptorSchema = 3
+    public static readonly Schema4: ReleaseDescriptorSchema = 4
     public static readonly Version = '0.1.0-early.6'
     public static readonly OtherVersion = '0.1.0-early.7'
     public static readonly ComponentVersion = '0.1.0'
@@ -194,7 +200,7 @@ class ManifestFixture
     public static readonly Absent = /absent/
     public static readonly Published = /is published/
     public static readonly PublishedOrAssembled = /published|assembles/
-    public static readonly Assembled = /^release 0\.1\.0-early\.6 assembles: 9 apps checked, no problems$/
+    public static readonly Assembled = /^release 0\.1\.0-early\.6 assembles: 10 apps checked, no problems$/
     public static readonly UnreachableError = 'The OCI registry is unreachable'
     public static readonly DescriptorRequest = '/pragmatic-tech-ai/pragmatic-release/manifests/0.1.0-early.6'
     public static readonly MissingUserError = 'Missing required environment variable: RELEASE_REGISTRY_USER'
@@ -242,9 +248,9 @@ class ManifestFixture
     }
 
     /**
-     * Releases all nine container repositories into `registry` and `assets` as container-release.yml does (component.json
+     * Releases all ten container repositories into `registry` and `assets` as container-release.yml does (component.json
      * asset and tag commit; the image labelled with the asset's digest and tagged `<version>` and `git-<commit>`); the
-     * image of `mislabelled` carries the digest of another component.json. Returns the manifest naming the nine images.
+     * image of `mislabelled` carries the digest of another component.json. Returns the manifest naming the ten images.
      */
     public static Released(registry: FakeRegistry, assets: FakeAssets, mislabelled?: ReleaseApp): ReturnType<typeof ManifestFixture.Filled>
     {
@@ -305,7 +311,7 @@ describe('PlatformReleaseManifest', () =>
 {
     const F = ManifestFixture
 
-    it('loads a nine-app manifest, every app from its own container repository', () => F.With(fixture =>
+    it('loads a ten-app manifest, every app from its own container repository', () => F.With(fixture =>
     {
         const doc = PlatformReleaseManifest.Load(fixture.Write(F.Filled()))
         assert.equal(doc.version, F.Version)
@@ -407,7 +413,7 @@ describe('release.template.json', () =>
         assert.throws(() => PlatformReleaseManifest.Load(fixture.Write(readFileSync(F.Template, F.Utf8))), ReleaseManifestDigestError)
     }))
 
-    it('filled with digests, it is a valid manifest of all nine apps (only the digests are left to fill)', () => F.With(fixture =>
+    it('filled with digests, it is a valid manifest of all ten apps (only the digests are left to fill)', () => F.With(fixture =>
     {
         const doc = PlatformReleaseManifest.Load(fixture.Write(F.Filled()))
         assert.equal(Object.keys(doc.components).length, ReleaseApps.All.length)
@@ -490,6 +496,27 @@ describe('release-manifest ci', () =>
         assert.equal(fixture.Err.length, 0)
     }))
 
+    it('passes a published schema-3 descriptor of nine images against a ten-app manifest whose nine match', () => F.With(async fixture =>
+    {
+        const registry = new FakeRegistry(F.Version, F.Digests(), false, F.Schema3)
+        fixture.Write(F.Filled())
+        assert.equal(await fixture.Run([F.Ci], F.Env, registry), 0, fixture.Err.join(F.LineBreak))
+        assert.match(fixture.Out[1], F.Published)
+        assert.equal(fixture.Err.length, 0)
+    }))
+
+    it('passes a published schema-4 descriptor of ten images, and fails it when the host agent digest was changed afterwards', () => F.With(async fixture =>
+    {
+        fixture.Write(F.Filled())
+        assert.equal(await fixture.Run([F.Ci], F.Env, new FakeRegistry(F.Version, F.Digests(), false, F.Schema4)), 0, fixture.Err.join(F.LineBreak))
+        assert.match(fixture.Out[1], F.Published)
+        const digests = F.Digests()
+        digests.set(ReleaseApp.HostAgent, F.OtherDigest)
+        const changed = await fixture.Run([F.Ci], F.Env, new FakeRegistry(F.Version, digests, false, F.Schema4))
+        assert.equal(changed, 1)
+        assert.ok(fixture.Err.some(line => line.endsWith(ReleaseApp.HostAgent)), fixture.Err.join(F.LineBreak))
+    }))
+
     it('fails a published version whose release.json was changed afterwards, naming the app', () => F.With(async fixture =>
     {
         const digests = F.Digests()
@@ -512,7 +539,7 @@ describe('release-manifest ci', () =>
         }
     }))
 
-    it('assembles a manifest of nine released images (each labelled with its component.json, tagged by version and commit)', () => F.With(async fixture =>
+    it('assembles a manifest of ten released images (each labelled with its component.json, tagged by version and commit)', () => F.With(async fixture =>
     {
         const registry = new FakeRegistry(undefined)
         const assets = new FakeAssets()
@@ -573,7 +600,7 @@ describe('release-manifest ci', () =>
 
 /**
  * Where the release signing key may be read: this repository's release.yml and nowhere else among the organisation's
- * new repositories (the nine container repositories, pragmatic-e2e, pragmatic-shared's reusable workflows), read from
+ * new repositories (the ten container repositories, pragmatic-e2e, pragmatic-shared's reusable workflows), read from
  * their clones beside this one (or under PLATFORM_SIBLINGS_ROOT) when present. pragmatic-server still holds the key
  * until it is archived (A3 Task 14).
  */
