@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
     OciRegistryClient,
+    ReleaseApp,
     ReleaseApps,
     ReleaseDescriptorCodec,
     ReleaseManifest,
@@ -12,7 +13,6 @@ import {
     ReleaseVersionExistsError,
     type IComponentAssetSource,
     type OciFetch,
-    type ReleaseApp,
     type ReleaseCliOutput,
     type ReleaseManifestDocument,
 } from '@pragmatic-tech-ai/pragmatic-release-toolkit'
@@ -46,6 +46,17 @@ export class PlatformReleaseManifest
     private static readonly ForeignRepositoryInfix = '): '
     private static readonly TagMismatchPrefix = 'The release tag does not name the manifest version: expected '
     private static readonly TagMismatchInfix = ', got '
+    /**
+     * The first platform admin console that renders the hive agent with its token as a mounted file and a readiness probe on
+     * its ready file (pragmatic-shared 0.18.8), and the first agent that reads that file and writes it: a release pairing the
+     * one with an older agent would leave every hive the console installs or updates without a running agent.
+     */
+    private static readonly FileTokenPlatformAdmin = '0.1.6'
+    private static readonly FileTokenAgent = '0.1.2'
+    private static readonly AgentTooOldPrefix = 'pragmatic-platform-admin '
+    private static readonly AgentTooOldInfix = ' renders hive agents that need pragmatic-hive-agent '
+    private static readonly AgentTooOldSuffix = ' or later (a token file and a ready file); this release pins '
+    private static readonly VersionPattern = /^(\d+)\.(\d+)\.(\d+)/
 
     /** `pragmatic-tech-ai/<app>`: the container repository an app's image and component.json come from. */
     public static RepositoryOf(app: ReleaseApp): string
@@ -71,7 +82,10 @@ export class PlatformReleaseManifest
         return doc
     }
 
-    /** Every app names `pragmatic-tech-ai/<app>`, so no release is assembled from a fork's or another app's release. */
+    /**
+     * Every app names `pragmatic-tech-ai/<app>`, so no release is assembled from a fork's or another app's release; and the
+     * platform admin console and the hive agent it renders fit together (FileTokenPlatformAdmin, FileTokenAgent).
+     */
     public static CheckPolicy(doc: ReleaseManifestDocument): void
     {
         const S = PlatformReleaseManifest
@@ -83,6 +97,27 @@ export class PlatformReleaseManifest
                 throw new PlatformReleaseManifestError(S.ForeignRepositoryPrefix + expected + S.ForeignRepositoryInfix + app)
             }
         }
+        const admin = doc.components[ReleaseApp.PlatformAdmin].version
+        const agent = doc.components[ReleaseApp.HiveAgent].version
+        if (S.AtLeast(admin, S.FileTokenPlatformAdmin) && !S.AtLeast(agent, S.FileTokenAgent))
+        {
+            throw new PlatformReleaseManifestError(S.AgentTooOldPrefix + admin + S.AgentTooOldInfix + S.FileTokenAgent + S.AgentTooOldSuffix + agent)
+        }
+    }
+
+    // Whether `version` is at least `floor` by major, minor and patch (a prerelease counts as its release here).
+    private static AtLeast(version: string, floor: string): boolean
+    {
+        const S = PlatformReleaseManifest
+        const a = S.VersionPattern.exec(version)
+        const b = S.VersionPattern.exec(floor)
+        if (a === null || b === null) return false
+        for (let i = 1; i <= 3; i += 1)
+        {
+            const d = Number(a[i]) - Number(b[i])
+            if (d !== 0) return d > 0
+        }
+        return true
     }
 
     /** The tag (`release/<version>` or `refs/tags/release/<version>`) names the manifest's version; throws otherwise. */

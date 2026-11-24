@@ -341,6 +341,20 @@ describe('PlatformReleaseManifest', () =>
         assert.throws(() => PlatformReleaseManifest.Load(fixture.Write(swapped)), ReleaseManifestInvalidError)
     }))
 
+    it('refuses a platform admin console that renders file-token agents beside an older hive agent, naming both versions', () => F.With(fixture =>
+    {
+        const paired = F.Filled()
+        paired.components[ReleaseApp.PlatformAdmin].version = '0.1.6'
+        paired.components[ReleaseApp.HiveAgent].version = '0.1.0'
+        assert.throws(() => PlatformReleaseManifest.Load(fixture.Write(paired)), (err: Error) =>
+            err instanceof PlatformReleaseManifestError && err.message.includes('pragmatic-platform-admin 0.1.6') && err.message.endsWith('0.1.0'))
+        paired.components[ReleaseApp.HiveAgent].version = '0.1.2'
+        assert.equal(PlatformReleaseManifest.Load(fixture.Write(paired)).components[ReleaseApp.HiveAgent].version, '0.1.2')
+        paired.components[ReleaseApp.PlatformAdmin].version = '0.1.5'
+        paired.components[ReleaseApp.HiveAgent].version = '0.1.0'
+        assert.equal(PlatformReleaseManifest.Load(fixture.Write(paired)).version, F.Version, 'an older console renders the older agent')
+    }))
+
     it('refuses an unreadable manifest with a sentence naming the path', () => F.With(fixture =>
     {
         const path = join(fixture.Dir, F.AbsentFile)
