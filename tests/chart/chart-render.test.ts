@@ -27,7 +27,7 @@ class RenderFixture
 {
     public static readonly Connected = { 'tls.mode': 'self-signed' }
     public static readonly Standalone = { 'tls.mode': 'self-signed', level: 'standalone' }
-    public static readonly Hosted = { 'tls.mode': 'self-signed', hosted: 'true', 'console.host': 'acme-k3xq.hives.pragmatic-tech.ai', 'console.address': 'relayed-hive-subdomain' }
+    public static readonly Hosted = { 'tls.mode': 'self-signed', hosted: 'true', 'console.host': 'acme-k3xq.hives.pragmatic-tech.ai', 'console.baseDomain': 'acme-k3xq.hives.pragmatic-tech.ai', 'console.address': 'relayed-hive-subdomain' }
     public static readonly HookAnnotation = 'helm.sh/hook'
 
     public static Workloads(docs: readonly K8sDoc[]): string[]
@@ -356,6 +356,20 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
         assert.equal((connectedAgent.containers[0].env as any[]).some(e => e.name === 'PRAGMATIC_AGENT_HOSTED'), false)
         const consoleEnv = (ChartFixture.Find(docs, 'Deployment', 'pragmatic-tenant-admin-acme')!.spec.template.spec.containers[0].env as any[]).map(e => e.name)
         assert.equal(consoleEnv.includes('PRAGMATIC_TENANT_ADMIN_AGENT_URL'), false)
+    })
+
+    it('a hosted engine publishes its sign-in service and environments under its own hive name, nothing shared', () =>
+    {
+        const docs = ChartFixture.Render(RenderFixture.Hosted)
+        const hosts = docs.filter(d => d.kind === 'Ingress').flatMap(d => (d.spec.rules as any[]).map(rule => rule.host as string))
+        assert.ok(hosts.length > 0)
+        for (const host of hosts)
+        {
+            assert.ok(host === 'acme-k3xq.hives.pragmatic-tech.ai' || host.endsWith('.acme-k3xq.hives.pragmatic-tech.ai'), host)
+        }
+        const text = ChartFixture.Text(RenderFixture.Hosted)
+        assert.match(text, /idp-acme\.acme-k3xq\.hives\.pragmatic-tech\.ai/)
+        assert.match(ChartFixture.Refusal({ ...RenderFixture.Hosted, 'console.baseDomain': '' }), /console\.baseDomain must equal console\.host/)
     })
 
     it('hosted is refused unless connected with the relayed console address', () =>

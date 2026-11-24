@@ -19,6 +19,9 @@ the hive agent pragmatic-hive-<hive>-agent, all in pragmatic-system.
 {{- define "engine.selfSigned" -}}{{ if eq .Values.tls.mode "self-signed" }}true{{ end }}{{- end -}}
 
 {{- define "engine.baseDomain" -}}
+{{- if and .Values.hosted (ne .Values.console.baseDomain .Values.console.host) -}}
+{{- fail "a hosted engine publishes everything under its own hive name: console.baseDomain must equal console.host (<label>.hives.pragmatic-tech.ai)" -}}
+{{- end -}}
 {{- if .Values.console.baseDomain -}}
 {{- .Values.console.baseDomain -}}
 {{- else -}}

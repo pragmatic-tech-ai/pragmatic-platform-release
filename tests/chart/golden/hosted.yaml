@@ -663,13 +663,13 @@ spec:
             - { name: PRAGMATIC_TENANT_ADMIN_DATA_ROOT, value: /data }
             - { name: PRAGMATIC_TENANT_ADMIN_PORT, value: "7100" }
             - { name: PRAGMATIC_TENANT_ADMIN_BIND, value: 0.0.0.0 }
-            - { name: PRAGMATIC_TENANT_ADMIN_BASE_DOMAIN, value: "hives.pragmatic-tech.ai" }
+            - { name: PRAGMATIC_TENANT_ADMIN_BASE_DOMAIN, value: "acme-k3xq.hives.pragmatic-tech.ai" }
             - { name: PRAGMATIC_TENANT_ADMIN_EXTERNAL_SCHEME, value: https }
             - { name: PRAGMATIC_TENANT_ADMIN_SECURE_COOKIE, value: "true" }
             - { name: PRAGMATIC_TENANT_ADMIN_TRUSTED_PROXY, value: "true" }
             - { name: PRAGMATIC_TENANT_ADMIN_DEPLOYMENT, value: "pragmatic-tenant-admin-acme" }
             - { name: PRAGMATIC_TENANT_ADMIN_CONSOLE_HOST, value: "acme-k3xq.hives.pragmatic-tech.ai" }
-            - { name: PRAGMATIC_IDP_BROWSER_BASE_URL, value: "https://idp-acme.hives.pragmatic-tech.ai" }
+            - { name: PRAGMATIC_IDP_BROWSER_BASE_URL, value: "https://idp-acme.acme-k3xq.hives.pragmatic-tech.ai" }
             - { name: PRAGMATIC_IDP_BASE_URL, value: "https://pragmatic-idp-acme.pragmatic-idp-acme.svc.cluster.local:9443" }
             - { name: PRAGMATIC_IDP_CA_FILE, value: /idp/ca/ca.crt }
             - { name: PRAGMATIC_IDP_ADMIN_TOKEN_FILE, value: /idp/token/admin-token }
@@ -853,7 +853,7 @@ spec:
               containerPort: 9443
           env:
             - { name: PRAGMATIC_IDP_PORT, value: "9443" }
-            - { name: PRAGMATIC_IDP_BASE_URL, value: "https://idp-acme.hives.pragmatic-tech.ai" }
+            - { name: PRAGMATIC_IDP_BASE_URL, value: "https://idp-acme.acme-k3xq.hives.pragmatic-tech.ai" }
             - { name: PRAGMATIC_IDP_INTERNAL_URL, value: "https://pragmatic-idp-acme.pragmatic-idp-acme.svc.cluster.local:9443" }
             - { name: PRAGMATIC_IDP_HOST, value: 0.0.0.0 }
             - { name: PRAGMATIC_IDP_DATA, value: /idp-data }
@@ -1104,10 +1104,10 @@ metadata:
 spec:
   
   tls:
-    - hosts: ["idp-acme.hives.pragmatic-tech.ai"]
+    - hosts: ["idp-acme.acme-k3xq.hives.pragmatic-tech.ai"]
       secretName: pragmatic-console-tls
   rules:
-    - host: "idp-acme.hives.pragmatic-tech.ai"
+    - host: "idp-acme.acme-k3xq.hives.pragmatic-tech.ai"
       http:
         paths:
           - path: /
@@ -1493,12 +1493,12 @@ spec:
             - { name: PRAGMATIC_BOOTSTRAP_HIVE_ID, value: "acme-hive" }
             - { name: PRAGMATIC_BOOTSTRAP_HIVE_LABEL, value: "acme-hive" }
             - { name: PRAGMATIC_BOOTSTRAP_CONSOLE_HOST, value: "acme-k3xq.hives.pragmatic-tech.ai" }
-            - { name: PRAGMATIC_BOOTSTRAP_BASE_DOMAIN, value: "hives.pragmatic-tech.ai" }
-            - { name: PRAGMATIC_BOOTSTRAP_IDP_HOST, value: "idp-acme.hives.pragmatic-tech.ai" }
+            - { name: PRAGMATIC_BOOTSTRAP_BASE_DOMAIN, value: "acme-k3xq.hives.pragmatic-tech.ai" }
+            - { name: PRAGMATIC_BOOTSTRAP_IDP_HOST, value: "idp-acme.acme-k3xq.hives.pragmatic-tech.ai" }
             - { name: PRAGMATIC_BOOTSTRAP_IDP_INTERNAL_HOST, value: "pragmatic-idp-acme.pragmatic-idp-acme.svc.cluster.local" }
             - { name: PRAGMATIC_BOOTSTRAP_TLS_MODE, value: "self-signed" }
             - { name: PRAGMATIC_BOOTSTRAP_TLS_SECRET, value: "" }
-            - { name: PRAGMATIC_BOOTSTRAP_OWNER_EMAIL, value: "owner@hives.pragmatic-tech.ai" }
+            - { name: PRAGMATIC_BOOTSTRAP_OWNER_EMAIL, value: "owner@acme-k3xq.hives.pragmatic-tech.ai" }
           securityContext:
             runAsNonRoot: true
             runAsUser: 10001
@@ -1559,12 +1559,12 @@ spec:
             - { name: PRAGMATIC_BOOTSTRAP_HIVE_ID, value: "acme-hive" }
             - { name: PRAGMATIC_BOOTSTRAP_HIVE_LABEL, value: "acme-hive" }
             - { name: PRAGMATIC_BOOTSTRAP_CONSOLE_HOST, value: "acme-k3xq.hives.pragmatic-tech.ai" }
-            - { name: PRAGMATIC_BOOTSTRAP_BASE_DOMAIN, value: "hives.pragmatic-tech.ai" }
-            - { name: PRAGMATIC_BOOTSTRAP_IDP_HOST, value: "idp-acme.hives.pragmatic-tech.ai" }
+            - { name: PRAGMATIC_BOOTSTRAP_BASE_DOMAIN, value: "acme-k3xq.hives.pragmatic-tech.ai" }
+            - { name: PRAGMATIC_BOOTSTRAP_IDP_HOST, value: "idp-acme.acme-k3xq.hives.pragmatic-tech.ai" }
             - { name: PRAGMATIC_BOOTSTRAP_IDP_INTERNAL_HOST, value: "pragmatic-idp-acme.pragmatic-idp-acme.svc.cluster.local" }
             - { name: PRAGMATIC_BOOTSTRAP_TLS_MODE, value: "self-signed" }
             - { name: PRAGMATIC_BOOTSTRAP_TLS_SECRET, value: "" }
-            - { name: PRAGMATIC_BOOTSTRAP_OWNER_EMAIL, value: "owner@hives.pragmatic-tech.ai" }
+            - { name: PRAGMATIC_BOOTSTRAP_OWNER_EMAIL, value: "owner@acme-k3xq.hives.pragmatic-tech.ai" }
           securityContext:
             runAsNonRoot: true
             runAsUser: 10001
@@ -1632,9 +1632,9 @@ spec:
             - name: PRAGMATIC_PREFLIGHT_CONSOLE_HOST
               value: "acme-k3xq.hives.pragmatic-tech.ai"
             - name: PRAGMATIC_PREFLIGHT_IDP_HOST
-              value: "idp-acme.hives.pragmatic-tech.ai"
+              value: "idp-acme.acme-k3xq.hives.pragmatic-tech.ai"
             - name: PRAGMATIC_PREFLIGHT_BASE_DOMAIN
-              value: "hives.pragmatic-tech.ai"
+              value: "acme-k3xq.hives.pragmatic-tech.ai"
             # azure and aws fetch the cluster's service-account issuer publicly: the workload-identity-issuer check.
             - name: PRAGMATIC_PREFLIGHT_REALM_SECRETS_OPTION
               value: "custom"
