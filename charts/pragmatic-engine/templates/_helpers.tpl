@@ -189,9 +189,11 @@ storageClassName: {{ .Values.storage.className }}
 (has({{ .a }}.{{ .f }}) == has({{ .b }}.{{ .f }}) && (!has({{ .a }}.{{ .f }}) || {{ .a }}.{{ .f }} == {{ .b }}.{{ .f }}))
 {{- end -}}
 
-{{/* CEL: the object (`object` or `oldObject`) is managed by the agent, the console or the engine chart. */}}
+{{/* CEL: the object (`object` or `oldObject`) is managed by the agent, the console or the engine chart. Helm labels what it
+     installs `managed-by: Helm` whatever the chart says, so a Helm object counts when its release is in the engine's
+     namespace (its ownership annotation). */}}
 {{- define "engine.celManaged" -}}
-(has({{ . }}.metadata.labels) && 'app.kubernetes.io/managed-by' in {{ . }}.metadata.labels && {{ . }}.metadata.labels['app.kubernetes.io/managed-by'] in ['pragmatic-hive-agent', 'pragmatic-tenant-admin', 'pragmatic-engine'])
+(has({{ . }}.metadata.labels) && 'app.kubernetes.io/managed-by' in {{ . }}.metadata.labels && ({{ . }}.metadata.labels['app.kubernetes.io/managed-by'] in ['pragmatic-hive-agent', 'pragmatic-tenant-admin', 'pragmatic-engine'] || ({{ . }}.metadata.labels['app.kubernetes.io/managed-by'] == 'Helm' && has({{ . }}.metadata.annotations) && 'meta.helm.sh/release-namespace' in {{ . }}.metadata.annotations && {{ . }}.metadata.annotations['meta.helm.sh/release-namespace'] == 'pragmatic-system')))
 {{- end -}}
 
 {{/* CEL: a release image by digest (a raw string: RE2). */}}

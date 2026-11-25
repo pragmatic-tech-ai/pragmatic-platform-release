@@ -296,6 +296,20 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
         const unmanaged = AgentPolicy.Changed(agent, copy => { delete copy.metadata.labels['app.kubernetes.io/managed-by'] })
         assert.ok((policy.Denials(update(unmanaged, moved(agent, 'ghcr.io/pragmatic-tech-ai/pragmatic-hive-agent' + digest))) ?? []).length > 0, 'UPDATE adding the label')
 
+        // As installed: Helm relabels everything it installs `managed-by: Helm` and annotates its release (found live on
+        // kind-pragmatic-customer, C3.4 Task 8). That is the engine chart's when the release is in pragmatic-system.
+        const asHelm = (workload: K8sDoc, namespace: string): K8sDoc => AgentPolicy.Changed(workload, copy =>
+        {
+            copy.metadata.labels['app.kubernetes.io/managed-by'] = 'Helm'
+            copy.metadata.annotations = { ...(copy.metadata.annotations ?? {}), 'meta.helm.sh/release-name': 'pragmatic-engine', 'meta.helm.sh/release-namespace': namespace }
+        })
+        const installed = asHelm(agent, 'pragmatic-system')
+        assert.deepEqual(policy.Denials(update(installed, moved(installed, 'ghcr.io/pragmatic-tech-ai/pragmatic-hive-agent' + digest))), [], 'a Helm-installed engine workload')
+        const foreign = asHelm(agent, 'someone-else')
+        assert.ok((policy.Denials(update(foreign, moved(foreign, 'ghcr.io/pragmatic-tech-ai/pragmatic-hive-agent' + digest))) ?? []).length > 0, 'Helm, another release namespace')
+        const unannotated = AgentPolicy.Changed(agent, copy => { copy.metadata.labels['app.kubernetes.io/managed-by'] = 'Helm' })
+        assert.ok((policy.Denials(update(unannotated, moved(unannotated, 'ghcr.io/pragmatic-tech-ai/pragmatic-hive-agent' + digest))) ?? []).length > 0, 'Helm without its release annotation')
+
         // Namespaces: never, with or without Pod Security labels.
         for (const labels of [{}, { 'pod-security.kubernetes.io/enforce': 'restricted', 'pragmatic/hive': 'acme-hive' }])
         {
