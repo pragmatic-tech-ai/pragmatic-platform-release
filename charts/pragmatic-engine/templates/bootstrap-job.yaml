@@ -143,6 +143,8 @@ rules:
       - pragmatic-owner-initial
       - pragmatic-tenant-idp-ca
       - pragmatic-tls-dev-ca
+      # The dev CA's key, in its own Secret (the bootstrap applies it; the console renews the certificate with it).
+      - pragmatic-tls-dev-ca-key
       - pragmatic-realm-master-key
       - pragmatic-postgres-realm-secrets-console
       - pragmatic-postgres-realm-secrets-idp

@@ -251,7 +251,11 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
         // Admitted: an image-only move of each engine workload by digest, and a restart annotation.
         assert.deepEqual(policy.Denials(update(console, moved(console, 'ghcr.io/pragmatic-tech-ai/pragmatic-tenant-admin' + digest))), [])
         assert.deepEqual(policy.Denials(update(agent, moved(agent, 'ghcr.io/pragmatic-tech-ai/pragmatic-hive-agent' + digest))), [])
-        assert.ok((policy.Denials(update(agent, moved(agent, 'registry.pragmatic-tech.ai/pragmatic-tech-ai/pragmatic-hive-agent' + digest))) ?? []).length > 0, 'another registry for the same image: its repository is pinned')
+        // The two release registries are one (C3.5 moves the images to registry.pragmatic-tech.ai): either way, the path is pinned.
+        const moving = moved(agent, 'registry.pragmatic-tech.ai/pragmatic-tech-ai/pragmatic-hive-agent' + digest)
+        assert.deepEqual(policy.Denials(update(agent, moving)), [], 'ghcr.io to registry.pragmatic-tech.ai')
+        assert.deepEqual(policy.Denials(update(moving, moved(agent, 'ghcr.io/pragmatic-tech-ai/pragmatic-hive-agent' + digest))), [], 'and back')
+        assert.ok((policy.Denials(update(agent, moved(agent, 'quay.io/pragmatic-tech-ai/pragmatic-hive-agent' + digest))) ?? []).length > 0, 'a third host')
         assert.deepEqual(policy.Denials(update(postgres, moved(postgres, 'ghcr.io/pragmatic-tech-ai/pragmatic-postgres' + digest), 'statefulsets')), [])
         assert.deepEqual(policy.Denials(update(agent, AgentPolicy.Changed(agent, copy => { copy.spec.template.metadata.annotations = { 'kubectl.kubernetes.io/restartedAt': '2026-11-25T00:00:00Z' } }))), [])
 
@@ -548,6 +552,26 @@ describe('the pragmatic-engine chart', { skip: !ChartFixture.HasHelm() }, () =>
         }
         const all = JSON.stringify(roles.map(role => role.rules))
         assert.equal(all.includes('pragmatic-tls-dev-ca-key'), false, 'nothing on the dev CA key')
+    })
+
+    it('the bootstrap Roles name exactly the Secrets EngineBootstrap reads and writes (pragmatic-tenant-admin df2232e)', () =>
+    {
+        // EngineSecretSet.Specs per scope (self-signed: the dev CA, its key and the console TLS Secret), by name.
+        const engine = [
+            'pragmatic-postgres-superuser', 'pragmatic-postgres-app-tenant-admin', 'pragmatic-postgres-app-tenant-idp', 'pragmatic-tenant-admin-master-key',
+            'pragmatic-tenant-admin-fingerprint', 'pragmatic-tenant-admin-seed', 'pragmatic-tenant-idp-admin-token', 'pragmatic-owner-initial', 'pragmatic-tenant-idp-ca',
+            'pragmatic-tls-dev-ca', 'pragmatic-tls-dev-ca-key', 'pragmatic-realm-master-key', 'pragmatic-postgres-realm-secrets-console', 'pragmatic-postgres-realm-secrets-idp',
+            'pragmatic-postgres-realm-secrets-environments', 'pragmatic-console-tls',
+        ]
+        const idp = [
+            'pragmatic-tenant-idp-master-key', 'pragmatic-tenant-idp-signing-key', 'pragmatic-tenant-idp-tls', 'pragmatic-tenant-idp-admin-token', 'pragmatic-tenant-idp-database',
+            'pragmatic-realm-master-key', 'pragmatic-tenant-idp-realm-secrets', 'pragmatic-console-tls',
+        ]
+        const docs = ChartFixture.Render(RenderFixture.Connected)
+        const named = (namespace: string): string[] => ((docs.find(d => d.kind === 'Role' && d.metadata.name === 'pragmatic-engine-bootstrap' && d.metadata.namespace === namespace)!.rules as any[])
+            .find(rule => rule.resources.includes('secrets') && rule.resourceNames !== undefined).resourceNames as string[]).slice().sort()
+        assert.deepEqual(named('pragmatic-system'), [...engine].sort())
+        assert.deepEqual(named('pragmatic-idp-acme'), [...idp].sort())
     })
 
     it('the bootstrap enforces the restricted Pod Security level on the engine\'s two namespaces', () =>

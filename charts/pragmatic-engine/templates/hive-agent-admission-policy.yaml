@@ -92,8 +92,8 @@ spec:
     - expression: >-
         !variables.workload || request.operation != 'UPDATE' || (has(object.spec.template.spec.{{ $list }}) == has(oldObject.spec.template.spec.{{ $list }})
         && (!has(object.spec.template.spec.{{ $list }}) || (size(object.spec.template.spec.{{ $list }}) == size(oldObject.spec.template.spec.{{ $list }})
-        && object.spec.template.spec.{{ $list }}.all(c, oldObject.spec.template.spec.{{ $list }}.exists(o, o.name == c.name && o.image.indexOf('@') > 0 && c.image.indexOf('@') > 0 && c.image.substring(0, c.image.indexOf('@')) == o.image.substring(0, o.image.indexOf('@')){{- range $f := $containerFields }} && {{ include "engine.celSame" (dict "a" "c" "b" "o" "f" $f) }}{{- end }})))))
-      message: "The hive agent may only change a container's image digest: its repository, command, arguments, environment, mounts and security stay as they were."
+        && object.spec.template.spec.{{ $list }}.all(c, oldObject.spec.template.spec.{{ $list }}.exists(o, o.name == c.name && o.image.matches({{ include "engine.celReleaseImage" $ }}) && c.image.matches({{ include "engine.celReleaseImage" $ }}) && c.image.substring(c.image.indexOf('/'), c.image.indexOf('@')) == o.image.substring(o.image.indexOf('/'), o.image.indexOf('@')){{- range $f := $containerFields }} && {{ include "engine.celSame" (dict "a" "c" "b" "o" "f" $f) }}{{- end }})))))
+      message: "The hive agent may only change a container's image digest (either release registry): its repository, command, arguments, environment, mounts and security stay as they were."
     {{- end }}
     - expression: >-
         !variables.workload || request.operation != 'UPDATE' || ((!has(object.spec.template.spec.volumes) || object.spec.template.spec.volumes.all(v, !has(v.hostPath)))
