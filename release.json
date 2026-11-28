@@ -1,16 +1,16 @@
 {
   "schema": 1,
-  "version": "0.1.0-early.20",
+  "version": "0.1.0-early.21",
   "components": {
     "pragmatic-platform-admin": { "repository": "pragmatic-tech-ai/pragmatic-platform-admin", "version": "0.1.12", "digest": "sha256:dc6fd4b3c1cd04b7b929b9ceeed748c9b5dd46591a20527441460b9a6a62a408" },
-    "pragmatic-platform-edge": { "repository": "pragmatic-tech-ai/pragmatic-platform-edge", "version": "0.1.2", "digest": "sha256:99fe3ae78ad5a1aebdcff7a7926d2afcf6f6bb46511e54c7e4bcf7a004bc9320" },
+    "pragmatic-platform-edge": { "repository": "pragmatic-tech-ai/pragmatic-platform-edge", "version": "0.1.3", "digest": "sha256:390e2d7f5821bbfef25d0085e15bedde6bc9bade775e80af6cd51d1d8e3798ec" },
     "pragmatic-env-server": { "repository": "pragmatic-tech-ai/pragmatic-env-server", "version": "0.1.4", "digest": "sha256:ab2dffa13e1cc0742b900f73a2bf2f1b1c0eb0d8c1223fbb5e61ddf278efc062" },
     "pragmatic-env-gateway": { "repository": "pragmatic-tech-ai/pragmatic-env-gateway", "version": "0.1.2", "digest": "sha256:0a5f101e3755815565d790ce0690cb28dcc2e2f8d41fb84ee640482b36d0f32e" },
-    "pragmatic-hive-agent": { "repository": "pragmatic-tech-ai/pragmatic-hive-agent", "version": "0.1.10", "digest": "sha256:bb0b607caca467fbd8e000a2ca364a35184397a6eb3726ec8770d39739c8ea93" },
-    "pragmatic-tenant-admin": { "repository": "pragmatic-tech-ai/pragmatic-tenant-admin", "version": "0.1.12", "digest": "sha256:0c434cc9e0d9feff553e7b0cb63285b17764fd3b4d566865904dbf118211839e" },
+    "pragmatic-hive-agent": { "repository": "pragmatic-tech-ai/pragmatic-hive-agent", "version": "0.1.12", "digest": "sha256:e7f80e96e9a93400a801e15476d277e4d30a29c278b81e888f52e2b225f2014e" },
+    "pragmatic-tenant-admin": { "repository": "pragmatic-tech-ai/pragmatic-tenant-admin", "version": "0.1.13", "digest": "sha256:201ba21956981414aa42803fc3307a83c7bee4034f1cb56e63bfcdc493f9dc32" },
     "pragmatic-tenant-idp": { "repository": "pragmatic-tech-ai/pragmatic-tenant-idp", "version": "0.2.8", "digest": "sha256:ce33355222d41d916988ae51793905bf127828cc0693a7f89bb6419a18d1d9d6" },
     "pragmatic-ui-unpack": { "repository": "pragmatic-tech-ai/pragmatic-ui-unpack", "version": "0.1.2", "digest": "sha256:8a06aa270136cea20a54e5332289754b004ae0b859fbfba9955828016d5eadfa" },
     "pragmatic-postgres": { "repository": "pragmatic-tech-ai/pragmatic-postgres", "version": "0.1.0", "digest": "sha256:9a1583a99b16c912280112c049f37449729d94a50a90ad02790d96bd86b6d59d" },
-    "pragmatic-host-agent": { "repository": "pragmatic-tech-ai/pragmatic-host-agent", "version": "0.1.3", "digest": "sha256:4f1d46fad0f906e1ad2edcb88e0f5a4c92af7304f718ea83b14db0a35f2b422e" }
+    "pragmatic-host-agent": { "repository": "pragmatic-tech-ai/pragmatic-host-agent", "version": "0.1.6", "digest": "sha256:33bb8a191b786a2d8e86dffe6b2a6c6cd4b94d2acb951bdd2d354882295e19da" }
   }
 }
